@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPi Time-Lapse Controller</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>📹 RPi Time-Lapse System</h1>
+            <p>Professional 4K Time-lapse Controller</p>
+        </header>
+
+        <div class="status-grid">
+            <div class="stat-card">
+                <span class="stat-value" id="captureStatus">Stopped</span>
+                <span class="stat-label">Status</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="imageCount">0</span>
+                <span class="stat-label">Images Captured</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="sessionTime">00:00:00</span>
+                <span class="stat-label">Session Time</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="nextCapture">--</span>
+                <span class="stat-label">Next Capture</span>
+            </div>
+        </div>
+
+        <div class="panel live-preview">
+            <h2>📺 Live Preview</h2>
+            <div class="stream-info">
+                <span id="streamConnectionStatus" class="stream-status">🔴 Disconnected</span>
+            </div>
+            <div class="stream-container">
+                <img id="liveStream" src="" alt="Live Stream" style="display: none;">
+                <div id="streamPlaceholder">
+                    <div>
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">📷</div>
+                        <p>Click "Start Preview" to view live stream</p>
+                        <small>Stream will start automatically when preview is enabled</small>
+                    </div>
+                </div>
+            </div>
+            <div class="controls">
+                <button class="btn btn-primary" onclick="toggleStream()" id="streamBtn">▶️ Start Preview</button>
+                <button class="btn btn-success" onclick="startCapture()" id="startBtn">▶️ Start Capture</button>
+                <button class="btn btn-danger" onclick="stopCapture()" id="stopBtn" disabled>⏹️ Stop Capture</button>
+            </div>
+        </div>
+
+        <div class="main-grid">
+            <div class="panel">
+                <h2>⚙️ Configuration</h2>
+                
+                <div class="config-section">
+                    <h3>Capture Settings</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Capture Interval (seconds)</label>
+                            <input type="number" id="captureInterval" value="5" min="1" max="3600">
+                        </div>
+                        <div class="form-group">
+                            <label>Image Quality</label>
+                            <select id="imageQuality">
+                                <option value="high">High (4K)</option>
+                                <option value="medium">Medium (1080p)</option>
+                                <option value="low">Low (720p)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <h3>📡 Stream Settings</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Stream Frame Rate (FPS)</label>
+                            <select id="streamFps">
+                                <option value="10">10 FPS (Low CPU)</option>
+                                <option value="15" selected>15 FPS (Balanced)</option>
+                                <option value="20">20 FPS (Smooth)</option>
+                                <option value="30">30 FPS (High CPU)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Stream Quality</label>
+                            <select id="streamQuality">
+                                <option value="low">Low (720p)</option>
+                                <option value="medium" selected>Medium (1080p)</option>
+                                <option value="high">High (1280p)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="config-section">
+                    <h3>📅 Daily Schedule</h3>
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="scheduleEnabled">
+                        <label for="scheduleEnabled">Enable Daily Schedule</label>
+                    </div>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label>Start Time</label>
+                            <input type="time" id="startTime" value="08:00">
+                        </div>
+                        <div class="form-group">
+                            <label>Stop Time</label>
+                            <input type="time" id="stopTime" value="18:00">
+                        </div>
+                    </div>
+                </div>
+                
+                <button class="btn btn-primary" onclick="saveConfig()" style="width: 100%;">
+                    💾 Save Configuration
+                </button>
+
+                <div class="system-info" id="systemInfo">
+                    <div class="info-item">
+                        <div class="info-label">Memory</div>
+                        <div class="info-value" id="memoryUsage">--</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Uptime</div>
+                        <div class="info-value" id="systemUptime">--</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Stream</div>
+                        <div class="info-value" id="streamStatus">Stopped</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>🎬 Video Generation</h2>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Frame Rate (FPS)</label>
+                        <select id="videoFps">
+                            <option value="24">24 FPS (Cinematic)</option>
+                            <option value="30" selected>30 FPS (Standard)</option>
+                            <option value="60">60 FPS (Smooth)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Video Quality</label>
+                        <select id="videoQuality">
+                            <option value="high">High Quality</option>
+                            <option value="medium" selected>Medium Quality</option>
+                            <option value="low">Low Quality</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="progress-container" id="videoProgress" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="videoProgressFill"></div>
+                    </div>
+                    <div class="progress-text" id="videoStatus"></div>
+                </div>
+                
+                <button class="btn btn-success" onclick="generateVideo()" id="generateBtn" style="width: 100%;">
+                    🎬 Generate Time-lapse Video
+                </button>
+            </div>
+        </div>
+
+        <div class="file-grid">
+            <div class="panel">
+                <h2>📸 Captured Images</h2>
+                <div class="controls">
+                    <button class="btn btn-primary btn-small" onclick="refreshImages()">🔄 Refresh</button>
+                    <button class="btn btn-danger btn-small" onclick="clearImages()">🗑️ Clear All</button>
+                </div>
+                <div class="file-list" id="imagesList">
+                    <div class="empty-state">
+                        <div class="icon">📸</div>
+                        <p>No images captured yet</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>🎥 Generated Videos</h2>
+                <div class="controls">
+                    <button class="btn btn-primary btn-small" onclick="refreshVideos()">🔄 Refresh</button>
+                </div>
+                <div class="file-list" id="videosList">
+                    <div class="empty-state">
+                        <div class="icon">🎥</div>
+                        <p>No videos generated yet</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="notification" class="notification"></div>
+
+    <!-- JavaScript Files -->
+    <script src="api.js"></script>
+    <script src="ui.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
