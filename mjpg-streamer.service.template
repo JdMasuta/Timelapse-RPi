@@ -1,0 +1,40 @@
+# MJPG-Streamer systemd service template
+# Copy this to /etc/systemd/system/mjpg-streamer.service
+# Customize the ExecStart command based on your camera type
+
+[Unit]
+Description=MJPG-Streamer for Timelapse2
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=video
+WorkingDirectory=/usr/local/bin
+Environment=LD_LIBRARY_PATH=/usr/local/lib
+
+# For Raspberry Pi Camera Module:
+ExecStart=/usr/local/bin/mjpg_streamer -i "input_raspicam.so -x 1280 -y 720 -fps 15 -ex auto" -o "output_http.so -w /usr/local/share/mjpg-streamer/www -p 8080"
+
+# For USB Camera (uncomment and modify device as needed):
+# ExecStart=/usr/local/bin/mjpg_streamer -i "input_uvc.so -d /dev/video0 -r 1280x720 -f 15" -o "output_http.so -w /usr/local/share/mjpg-streamer/www -p 8080"
+
+ExecStop=/bin/kill -TERM $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+
+# Installation instructions:
+# 1. Copy this file to /etc/systemd/system/mjpg-streamer.service
+# 2. Edit the ExecStart line for your camera type
+# 3. sudo systemctl daemon-reload
+# 4. sudo systemctl enable mjpg-streamer.service
+# 5. sudo systemctl start mjpg-streamer.service
+#
+# Control commands:
+# sudo systemctl start mjpg-streamer    # Start service
+# sudo systemctl stop mjpg-streamer     # Stop service  
+# sudo systemctl status mjpg-streamer   # Check status
+# sudo systemctl restart mjpg-streamer  # Restart service

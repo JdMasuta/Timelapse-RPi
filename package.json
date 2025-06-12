@@ -7,10 +7,18 @@
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["timelapse", "raspberry-pi", "camera", "nodejs", "express", "socket.io", "photography", "raspbian", "libcamera", "automation", "mjpg-streamer", "streaming", "surveillance"],
+  "author": "Josh",
   "license": "ISC",
-  "description": "",
+  "description": "A Node.js-based timelapse capture and management system with MJPG-Streamer integration and real-time web interface for Raspberry Pi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JdMasuta/Timelaspe-RPi.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JdMasuta/Timelaspe-RPi/issues"
+  },
+  "homepage": "https://github.com/JdMasuta/Timelaspe-RPi#readme",
   "dependencies": {
     "express": "^5.1.0",
     "nodemon": "^3.1.10",
