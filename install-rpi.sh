@@ -31,7 +31,7 @@ fi
 
 # Install additional dependencies
 echo "📦 Installing system dependencies..."
-sudo apt install -y git libcamera-apps fswebcam cmake libjpeg8-dev gcc g++
+sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++
 
 # Install/Build MJPG-Streamer
 echo "🎥 Installing MJPG-Streamer..."
