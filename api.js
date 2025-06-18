@@ -89,6 +89,31 @@ socket.on('notification', (data) => {
     showNotification(data.message, data.type);
 });
 
+socket.on('imageListUpdate', (imageList) => {
+    const imagesList = document.getElementById('imagesList');
+    
+    if (imageList.length === 0) {
+        imagesList.innerHTML = `
+            <div class="empty-state">
+                <div class="icon">📸</div>
+                <p>No images captured yet</p>
+            </div>
+        `;
+    } else {
+        imagesList.innerHTML = imageList.map(image => `
+            <div class="image-item">
+                <div class="image-info">
+                    <strong>${image.filename}</strong>
+                    <div class="image-meta">
+                        <span>Size: ${(image.size / 1024).toFixed(1)} KB</span>
+                        <span>Created: ${new Date(image.created).toLocaleString()}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+});
+
 socket.on('imagesCleared', () => {
     document.getElementById('imagesList').innerHTML = `
         <div class="empty-state">

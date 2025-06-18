@@ -1,0 +1,14 @@
+Node.js server running on: 192.168.99.176:3000
+Server listening on port 3000
+Open your browser to http://localhost:3000
+A user connected: qhLhRcqUopLyDd2xAAAB
+/home/access/Timelapse2/server.js:367
+        streamStatus: streamProcess ? 'Streaming' : 'Stopped'
+                      ^
+
+ReferenceError: streamProcess is not defined
+    at Timeout._onTimeout (/home/access/Timelapse2/server.js:367:23)
+    at listOnTimeout (node:internal/timers:588:17)
+    at process.processTimers (node:internal/timers:523:7)
+
+Node.js v22.16.0

@@ -5,6 +5,7 @@ const socketIo = require('socket.io');
 const path = require('path');
 const { spawn } = require('child_process');
 const os = require('os'); // Import the 'os' module
+const CameraService = require('./services/cameraService');
 
 const app = express();
 const server = http.createServer(app);
@@ -60,26 +61,25 @@ let currentConfig = {
     videoQuality: 'medium'
 };
 
+// Initialize camera service
+const cameraService = new CameraService();
 let captureStatus = 'Stopped';
-let imageCount = 0;
-let sessionStartTime = null;
-let captureProcess = null; // To hold the child process for image capture (e.g., raspistill)
-let streamProcess = null; // To hold the mjpeg-streamer child process for video streaming
 
 // --- Socket.IO Connection Handling ---
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
     // Send initial status and config to the newly connected client
+    const status = cameraService.getStatus();
     socket.emit('statusUpdate', {
-        captureStatus: captureStatus,
-        imageCount: imageCount,
-        sessionTime: formatTime(sessionStartTime ? (Date.now() - sessionStartTime) / 1000 : 0),
-        nextCapture: '--'
+        captureStatus: status.isCapturing ? 'Running' : 'Stopped',
+        imageCount: status.imageCount,
+        sessionTime: status.sessionTime,
+        nextCapture: status.isCapturing ? `in ${currentConfig.captureInterval}s` : '--'
     });
     socket.emit('configUpdate', currentConfig);
     // Also send the current stream status and URL if streaming is active
-    if (streamProcess) {
+    if (cameraService.isStreamActive()) {
         socket.emit('streamStatusUpdate', 'Streaming');
         // Now using the server's actual IP address
         socket.emit('liveStreamUrl', `http://${SERVER_IP_ADDRESS}:8080/?action=stream`);
@@ -107,32 +107,79 @@ io.on('connection', (socket) => {
         socket.emit('notification', { message: 'Configuration saved!', type: 'success' });
     });
 
-    // Handle start capture command (simulation, as direct /dev/video0 for photos needs more setup)
-    socket.on('startCapture', () => {
-        if (captureStatus === 'Stopped') {
-            console.log('Starting capture simulation...');
-            captureStatus = 'Running';
-            imageCount = 0;
-            sessionStartTime = Date.now();
+    // Handle start capture command
+    socket.on('startCapture', async () => {
+        const status = cameraService.getStatus();
+        if (!status.isCapturing) {
+            try {
+                captureStatus = 'Running';
+                
+                // No need to manually set stream process - CameraService manages it internally
+                
+                await cameraService.startTimelapse(
+                    currentConfig,
+                    // onImageCaptured callback
+                    (captureData) => {
+                        io.emit('statusUpdate', {
+                            captureStatus: 'Running',
+                            imageCount: captureData.imageCount,
+                            sessionTime: captureData.sessionTime,
+                            nextCapture: `in ${currentConfig.captureInterval}s`
+                        });
+                    },
+                    // onError callback
+                    (error) => {
+                        console.error('Timelapse capture error:', error);
+                        captureStatus = 'Stopped';
+                        io.emit('statusUpdate', {
+                            captureStatus: 'Stopped',
+                            imageCount: cameraService.getStatus().imageCount,
+                            sessionTime: cameraService.getStatus().sessionTime,
+                            nextCapture: '--'
+                        });
+                        socket.emit('notification', { 
+                            message: `Capture failed: ${error.message}`, 
+                            type: 'error' 
+                        });
+                    },
+                    // onStreamNotification callback
+                    (type, message) => {
+                        if (type === 'stream-paused') {
+                            io.emit('streamStatusUpdate', 'Paused for capture');
+                            io.emit('notification', { message, type: 'info' });
+                        } else if (type === 'stream-resumed') {
+                            io.emit('streamStatusUpdate', 'Streaming');
+                            io.emit('notification', { message, type: 'success' });
+                        } else if (type === 'stream-ready') {
+                            // New handler for when stream is actually ready
+                            const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
+                            io.emit('streamStatusUpdate', 'Streaming');
+                            io.emit('liveStreamUrl', streamUrl);
+                            io.emit('notification', { message, type: 'success' });
+                        } else if (type === 'stream-error') {
+                            io.emit('streamStatusUpdate', 'Stopped');
+                            io.emit('liveStreamUrl', '');
+                            io.emit('notification', { message, type: 'error' });
+                        }
+                    }
+                );
 
-            let captureIntervalId = setInterval(() => {
-                imageCount++;
+                const newStatus = cameraService.getStatus();
                 io.emit('statusUpdate', {
-                    captureStatus: captureStatus,
-                    imageCount: imageCount,
-                    sessionTime: formatTime((Date.now() - sessionStartTime) / 1000),
+                    captureStatus: 'Running',
+                    imageCount: newStatus.imageCount,
+                    sessionTime: newStatus.sessionTime,
                     nextCapture: `in ${currentConfig.captureInterval}s`
                 });
-            }, currentConfig.captureInterval * 1000);
-
-            socket.captureIntervalId = captureIntervalId; // Store interval ID on socket for per-client stop
-            io.emit('statusUpdate', {
-                captureStatus: captureStatus,
-                imageCount: imageCount,
-                sessionTime: '00:00:00',
-                nextCapture: `in ${currentConfig.captureInterval}s`
-            });
-            socket.emit('notification', { message: 'Time-lapse capture started (simulation)!', type: 'success' });
+                socket.emit('notification', { message: 'Time-lapse capture started with fswebcam!', type: 'success' });
+            } catch (error) {
+                console.error('Failed to start timelapse:', error);
+                captureStatus = 'Stopped';
+                socket.emit('notification', { 
+                    message: `Failed to start capture: ${error.message}`, 
+                    type: 'error' 
+                });
+            }
         } else {
             socket.emit('notification', { message: 'Capture is already running.', type: 'info' });
         }
@@ -140,19 +187,23 @@ io.on('connection', (socket) => {
 
     // Handle stop capture command
     socket.on('stopCapture', () => {
-        if (captureStatus === 'Running') {
-            console.log('Stopping capture simulation...');
-            captureStatus = 'Stopped';
-            clearInterval(socket.captureIntervalId); // Clear the simulation interval
-
-            io.emit('statusUpdate', {
-                captureStatus: captureStatus,
-                imageCount: imageCount,
-                sessionTime: formatTime((Date.now() - sessionStartTime) / 1000),
-                nextCapture: '--'
-            });
-            sessionStartTime = null; // Reset session time
-            socket.emit('notification', { message: 'Time-lapse capture stopped.', type: 'success' });
+        const status = cameraService.getStatus();
+        if (status.isCapturing) {
+            console.log('Stopping timelapse capture...');
+            const stopped = cameraService.stopTimelapse();
+            
+            if (stopped) {
+                captureStatus = 'Stopped';
+                const finalStatus = cameraService.getStatus();
+                
+                io.emit('statusUpdate', {
+                    captureStatus: 'Stopped',
+                    imageCount: finalStatus.imageCount,
+                    sessionTime: finalStatus.sessionTime,
+                    nextCapture: '--'
+                });
+                socket.emit('notification', { message: 'Time-lapse capture stopped.', type: 'success' });
+            }
         } else {
             socket.emit('notification', { message: 'Capture is not running.', type: 'info' });
         }
@@ -160,134 +211,131 @@ io.on('connection', (socket) => {
 
     // Handle toggle stream command
     let streamReadyEmitted = false; // Flag to prevent multiple URL emissions
-    socket.on('toggleStream', () => {
-        if (!streamProcess) {
-            console.log('Attempting to start live stream with mjpeg-streamer...');
-            // Determine resolution for mjpeg-streamer
-            let resolution = '640x480';
-            switch (currentConfig.streamQuality) {
-                case 'low': resolution = '640x480'; break;
-                case 'medium': resolution = '1280x720'; break;
-                case 'high': resolution = '1920x1080'; break;
-            }
-
-            // Spawn mjpg_streamer process
-            // It's highly recommended to use absolute paths for the executable and the www directory
-            try {
-                streamProcess = spawn(MJPEG_STREAMER_PATH, [
-                    '-i', `input_uvc.so -d /dev/video0 -r ${resolution} -f ${currentConfig.streamFps}`,
-                    '-o', `output_http.so -w ${MJPEG_STREAMER_WWW_PATH} -p 8080` // Use the specified www path
-                ]);
-
-                streamProcess.stdout.on('data', (data) => {
-                    console.log(`mjpeg-streamer stdout: ${data.toString()}`);
-                });
-
-                streamProcess.stderr.on('data', (data) => {
-                    const stderrOutput = data.toString();
-                    console.error(`mjpeg-streamer stderr: ${stderrOutput}`);
-                    // Check if the server is ready to stream
-                    if (stderrOutput.includes('o: commands.............: enabled') && !streamReadyEmitted) {
-                        // Now using the server's actual IP address
+    socket.on('toggleStream', async () => {
+        try {
+            if (!cameraService.isStreamActive()) {
+                // Start stream using centralized method
+                await cameraService.startStream(currentConfig, (event, message) => {
+                    if (event === 'stream-ready') {
                         const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
                         io.emit('streamStatusUpdate', 'Streaming');
-                        io.emit('liveStreamUrl', streamUrl); // Send the stream URL to all clients
+                        io.emit('liveStreamUrl', streamUrl);
                         socket.emit('notification', { message: 'Live preview started!', type: 'success' });
-                        streamReadyEmitted = true; // Prevent multiple emissions
+                        streamReadyEmitted = true;
+                    } else if (event === 'stream-error') {
+                        io.emit('streamStatusUpdate', 'Stopped');
+                        io.emit('liveStreamUrl', '');
+                        socket.emit('notification', { message: `Stream error: ${message}`, type: 'error' });
+                    } else if (event === 'stream-stopped') {
+                        io.emit('streamStatusUpdate', 'Stopped');
+                        io.emit('liveStreamUrl', '');
+                        streamReadyEmitted = false;
                     }
-                    // Common errors here that prevent streaming:
-                    // - "No such file or directory": MJPEG_STREAMER_PATH or MJPEG_STREAMER_WWW_PATH is wrong.
-                    // - "Permission denied": Check permissions for /dev/video0 or the executable.
-                    // - "select timeout": Camera device is busy or inaccessible.
-                    // - "no input plugin loaded": Check input_uvc.so path/permissions, or if input_uvc.so is correct for your camera.
-                    // - "Failed to open video device": /dev/video0 issue.
                 });
-
-                streamProcess.on('close', (code) => {
-                    console.log(`mjpeg-streamer process exited with code ${code}`);
-                    streamProcess = null;
-                    streamReadyEmitted = false; // Reset flag on close
-                    io.emit('streamStatusUpdate', 'Stopped');
-                    io.emit('liveStreamUrl', ''); // Clear URL on client
-                    socket.emit('notification', { message: 'Live preview stopped unexpectedly. Code: ' + code, type: 'error' });
-                });
-
-                streamProcess.on('error', (err) => {
-                    console.error('Failed to start mjpeg-streamer process:', err);
-                    streamProcess = null;
-                    streamReadyEmitted = false; // Reset flag on error
-                    io.emit('streamStatusUpdate', 'Stopped');
-                    io.emit('liveStreamUrl', ''); // Clear URL on client
-                    socket.emit('notification', { message: `Failed to start live preview process: ${err.message}. Check mjpeg-streamer path/permissions.`, type: 'error' });
-                });
-
-            } catch (error) {
-                console.error('Error attempting to spawn mjpeg-streamer:', error);
-                socket.emit('notification', { message: `Fatal error starting stream: ${error.message}.`, type: 'error' });
+            } else {
+                // Stop stream using centralized method
+                await cameraService.stopStream();
+                io.emit('streamStatusUpdate', 'Stopped');
+                io.emit('liveStreamUrl', '');
+                socket.emit('notification', { message: 'Live preview stopped.', type: 'success' });
+                streamReadyEmitted = false;
             }
-
-        } else {
-            console.log('Stopping live stream...');
-            if (streamProcess) {
-                streamProcess.kill('SIGKILL'); // Use SIGKILL to ensure termination
-                streamProcess = null;
-                streamReadyEmitted = false; // Reset flag on stop
-            }
-            io.emit('streamStatusUpdate', 'Stopped');
-            io.emit('liveStreamUrl', ''); // Clear URL on client
-            socket.emit('notification', { message: 'Live preview stopped.', type: 'success' });
+        } catch (error) {
+            console.error('Stream toggle error:', error);
+            socket.emit('notification', { message: error.message, type: 'error' });
         }
     });
 
-    // Handle video generation (conceptual)
-    socket.on('generateVideo', () => {
-        console.log('Generating video...');
-        io.emit('videoGenerationStatus', { status: 'in-progress', message: 'Starting video generation...' });
-        let progress = 0;
-        const videoGenerationInterval = setInterval(() => {
-            progress += 10;
-            if (progress <= 100) {
-                io.emit('videoGenerationStatus', { status: 'in-progress', message: `Generating: ${progress}%`, progress: progress });
-            } else {
-                clearInterval(videoGenerationInterval);
-                io.emit('videoGenerationStatus', { status: 'complete', message: 'Video generation complete!' });
-                socket.emit('notification', { message: 'Time-lapse video generated!', type: 'success' });
-            }
-        }, 500); // Simulate progress every 0.5 seconds
+    // Handle video generation
+    socket.on('generateVideo', async () => {
+        try {
+            console.log('Generating video with ffmpeg...');
+            io.emit('videoGenerationStatus', { status: 'in-progress', message: 'Starting video generation...' });
+            
+            const result = await cameraService.generateVideo(
+                currentConfig,
+                (progress) => {
+                    io.emit('videoGenerationStatus', { 
+                        status: 'in-progress', 
+                        message: `Generating: ${progress}%`, 
+                        progress: progress 
+                    });
+                }
+            );
+            
+            io.emit('videoGenerationStatus', { 
+                status: 'complete', 
+                message: `Video generation complete! File: ${result.filename}` 
+            });
+            socket.emit('notification', { 
+                message: `Time-lapse video generated: ${result.filename}`, 
+                type: 'success' 
+            });
+        } catch (error) {
+            console.error('Video generation failed:', error);
+            io.emit('videoGenerationStatus', { 
+                status: 'error', 
+                message: `Video generation failed: ${error.message}` 
+            });
+            socket.emit('notification', { 
+                message: `Video generation failed: ${error.message}`, 
+                type: 'error' 
+            });
+        }
     });
 
-    // Handle image refresh (simulation)
-    socket.on('refreshImages', () => {
-        console.log('Refreshing images (simulation)...');
-        socket.emit('notification', { message: 'Images refreshed (simulation).', type: 'info' });
+    // Handle image refresh
+    socket.on('refreshImages', async () => {
+        try {
+            console.log('Refreshing images...');
+            const imageList = await cameraService.getImageList();
+            io.emit('imageListUpdate', imageList); // Send to all clients
+            socket.emit('notification', { message: `Found ${imageList.length} images.`, type: 'info' });
+        } catch (error) {
+            console.error('Failed to refresh images:', error);
+            socket.emit('notification', { message: `Failed to refresh images: ${error.message}`, type: 'error' });
+        }
     });
 
-    // Handle clear images (simulation)
-    socket.on('clearImages', () => {
-        console.log('Clearing images (simulation)...');
-        imageCount = 0; // Reset count on server side
-        io.emit('statusUpdate', {
-            captureStatus: captureStatus,
-            imageCount: imageCount,
-            sessionTime: formatTime(sessionStartTime ? (Date.now() - sessionStartTime) / 1000 : 0),
-            nextCapture: '--'
-        });
-        socket.emit('notification', { message: 'All captured images cleared (simulation)!', type: 'success' });
-        io.emit('imagesCleared');
+    // Handle clear images
+    socket.on('clearImages', async () => {
+        try {
+            console.log('Clearing images...');
+            const clearedCount = await cameraService.clearImages();
+            
+            // Update status with current camera service state
+            const status = cameraService.getStatus();
+            io.emit('statusUpdate', {
+                captureStatus: status.isCapturing ? 'Running' : 'Stopped',
+                imageCount: status.imageCount,
+                sessionTime: status.sessionTime,
+                nextCapture: status.isCapturing ? `in ${currentConfig.captureInterval}s` : '--'
+            });
+            
+            socket.emit('notification', { message: `Cleared ${clearedCount} images!`, type: 'success' });
+            io.emit('imagesCleared');
+        } catch (error) {
+            console.error('Failed to clear images:', error);
+            socket.emit('notification', { message: `Failed to clear images: ${error.message}`, type: 'error' });
+        }
     });
 
-    // Handle video refresh (simulation)
-    socket.on('refreshVideos', () => {
-        console.log('Refreshing videos (simulation)...');
-        socket.emit('notification', { message: 'Videos refreshed (simulation).', type: 'info' });
+    // Handle video refresh
+    socket.on('refreshVideos', async () => {
+        try {
+            console.log('Refreshing videos...');
+            const videoList = await cameraService.getVideoList();
+            socket.emit('videoListUpdate', videoList);
+            socket.emit('notification', { message: `Found ${videoList.length} videos.`, type: 'info' });
+        } catch (error) {
+            console.error('Failed to refresh videos:', error);
+            socket.emit('notification', { message: `Failed to refresh videos: ${error.message}`, type: 'error' });
+        }
     });
 
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
-        // Clear any specific intervals for this socket if needed
-        if (socket.captureIntervalId) {
-            clearInterval(socket.captureIntervalId);
-        }
+        // No socket-specific cleanup needed with camera service
     });
 });
 
@@ -316,6 +364,6 @@ let systemInfoInterval = setInterval(() => {
     io.emit('systemInfoUpdate', {
         memoryUsage: memoryUsage,
         systemUptime: systemUptime,
-        streamStatus: streamProcess ? 'Streaming' : 'Stopped'
+        streamStatus: cameraService.isStreamActive() ? 'Streaming' : 'Stopped'
     });
 }, 5000); // Update every 5 seconds
