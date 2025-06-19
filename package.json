@@ -8,7 +8,21 @@
     "dev": "nodemon server.js",
     "test_fswebcam": "fswebcam -r 3840x2160 --title 'PROJECT A123456' --timestamp '%Y-%m-%d %H:%M:%S (%Z)' --png 9 test.png"
   },
-  "keywords": ["timelapse", "raspberry-pi", "camera", "nodejs", "express", "socket.io", "photography", "raspbian", "libcamera", "automation", "mjpg-streamer", "streaming", "surveillance"],
+  "keywords": [
+    "timelapse",
+    "raspberry-pi",
+    "camera",
+    "nodejs",
+    "express",
+    "socket.io",
+    "photography",
+    "raspbian",
+    "libcamera",
+    "automation",
+    "mjpg-streamer",
+    "streaming",
+    "surveillance"
+  ],
   "author": "Josh",
   "license": "ISC",
   "description": "A Node.js-based timelapse capture and management system with MJPG-Streamer integration and real-time web interface for Raspberry Pi",
@@ -21,6 +35,7 @@
   },
   "homepage": "https://github.com/JdMasuta/Timelaspe-RPi#readme",
   "dependencies": {
+    "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "nodemon": "^3.1.10",
     "socket.io": "^4.8.1"
