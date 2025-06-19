@@ -23,7 +23,7 @@ function showNotification(message, type = 'info') {
 /**
  * Switch between configuration tabs
  */
-function switchTab(tabName) {
+function switchTab(tabName, sourceEvent = null) {
     // Hide all tab contents
     const tabContents = document.querySelectorAll('.tab-content');
     tabContents.forEach(content => {
@@ -43,13 +43,17 @@ function switchTab(tabName) {
     }
     
     // Activate selected tab button
-    const selectedButton = event?.target || document.querySelector(`[onclick="switchTab('${tabName}')"]`);
+    const selectedButton = sourceEvent?.target || document.querySelector(`[onclick="switchTab('${tabName}')"]`);
     if (selectedButton) {
         selectedButton.classList.add('active');
     }
     
     // Store active tab in sessionStorage for persistence
-    sessionStorage.setItem('activeConfigTab', tabName);
+    try {
+        sessionStorage.setItem('activeConfigTab', tabName);
+    } catch (error) {
+        console.warn('Could not save active tab to sessionStorage:', error);
+    }
     
     console.log(`Switched to tab: ${tabName}`);
 }
@@ -59,7 +63,19 @@ function switchTab(tabName) {
  */
 function initializeTabs() {
     // Get previously active tab or default to 'basic'
-    const activeTab = sessionStorage.getItem('activeConfigTab') || 'basic';
+    let activeTab = 'basic';
+    try {
+        activeTab = sessionStorage.getItem('activeConfigTab') || 'basic';
+    } catch (error) {
+        console.warn('Could not access sessionStorage:', error);
+    }
+    
+    // Ensure the tab exists before switching
+    const tabExists = document.getElementById(`tab-${activeTab}`);
+    if (!tabExists) {
+        activeTab = 'basic';
+    }
+    
     switchTab(activeTab);
 }
 
