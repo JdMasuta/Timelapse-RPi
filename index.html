@@ -11,7 +11,7 @@
     <div class="container">
         <header class="header">
             <h1>📹 RPi Time-Lapse System</h1>
-            <p>Professional 4K Time-lapse Controller</p>
+            <p>Professional 4K Time-lapse Controller with Advanced Configuration</p>
         </header>
 
         <div class="status-grid">
@@ -59,68 +59,302 @@
             <div class="panel">
                 <h2>⚙️ Configuration</h2>
                 
-                <div class="config-section">
-                    <h3>Capture Settings</h3>
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label>Capture Interval (seconds)</label>
-                            <input type="number" id="captureInterval" value="5" min="1" max="3600">
+                <!-- Configuration Tabs -->
+                <div class="config-tabs">
+                    <button class="tab-button active" onclick="switchTab('basic')">📋 Basic</button>
+                    <button class="tab-button" onclick="switchTab('camera')">📷 Camera</button>
+                    <button class="tab-button" onclick="switchTab('video')">🎬 Video</button>
+                    <button class="tab-button" onclick="switchTab('storage')">🗄️ Storage</button>
+                    <button class="tab-button" onclick="switchTab('advanced')">🔧 Advanced</button>
+                </div>
+
+                <!-- Basic Settings Tab -->
+                <div id="tab-basic" class="tab-content active">
+                    <div class="config-section">
+                        <h3>📸 Capture Settings</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Capture Interval (seconds)</label>
+                                <input type="number" id="captureInterval" value="5" min="1" max="3600">
+                                <small class="help-text">Time between each image capture (1-3600 seconds)</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Image Quality</label>
+                                <select id="imageQuality">
+                                    <option value="high">High (4K) - 3840x2160</option>
+                                    <option value="medium">Medium (1080p) - 1920x1080</option>
+                                    <option value="low">Low (720p) - 1280x720</option>
+                                </select>
+                                <small class="help-text">Higher quality = larger file sizes</small>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>Image Quality</label>
-                            <select id="imageQuality">
-                                <option value="high">High (4K)</option>
-                                <option value="medium">Medium (1080p)</option>
-                                <option value="low">Low (720p)</option>
-                            </select>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>📡 Stream Settings</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Stream Frame Rate (FPS)</label>
+                                <select id="streamFps">
+                                    <option value="5">5 FPS (Very Low CPU)</option>
+                                    <option value="10">10 FPS (Low CPU)</option>
+                                    <option value="15" selected>15 FPS (Balanced)</option>
+                                    <option value="20">20 FPS (Smooth)</option>
+                                    <option value="25">25 FPS (High Quality)</option>
+                                    <option value="30">30 FPS (Maximum, High CPU)</option>
+                                </select>
+                                <small class="help-text">Higher FPS = smoother preview, more CPU usage</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Stream Quality</label>
+                                <select id="streamQuality">
+                                    <option value="low">Low (480p) - 640x480</option>
+                                    <option value="medium" selected>Medium (720p) - 1280x720</option>
+                                    <option value="high">High (1080p) - 1920x1080</option>
+                                </select>
+                                <small class="help-text">Stream resolution for live preview</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>📅 Daily Schedule</h3>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="scheduleEnabled">
+                            <label for="scheduleEnabled">Enable Daily Schedule</label>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Start Time</label>
+                                <input type="time" id="startTime" value="08:00">
+                                <small class="help-text">Daily capture start time</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Stop Time</label>
+                                <input type="time" id="stopTime" value="18:00">
+                                <small class="help-text">Daily capture stop time</small>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="config-section">
-                    <h3>📡 Stream Settings</h3>
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label>Stream Frame Rate (FPS)</label>
-                            <select id="streamFps">
-                                <option value="10">10 FPS (Low CPU)</option>
-                                <option value="15" selected>15 FPS (Balanced)</option>
-                                <option value="20">20 FPS (Smooth)</option>
-                                <option value="30">30 FPS (High CPU)</option>
-                            </select>
+                <!-- Camera Settings Tab -->
+                <div id="tab-camera" class="tab-content">
+                    <div class="config-section">
+                        <h3>📷 Camera Hardware</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Camera Type</label>
+                                <select id="cameraType">
+                                    <option value="libcamera">Raspberry Pi Camera (libcamera)</option>
+                                    <option value="usb">USB Camera</option>
+                                    <option value="fswebcam">Generic Camera (fswebcam)</option>
+                                </select>
+                                <small class="help-text">Type of camera connected to system</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Camera Device</label>
+                                <input type="text" id="cameraDevice" value="0" placeholder="0 or /dev/video0">
+                                <small class="help-text">Camera device ID or path</small>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label>Stream Quality</label>
-                            <select id="streamQuality">
-                                <option value="low">Low (720p)</option>
-                                <option value="medium" selected>Medium (1080p)</option>
-                                <option value="high">High (1280p)</option>
-                            </select>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>🔄 Camera Orientation</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Rotation</label>
+                                <select id="rotation">
+                                    <option value="0">0° (No rotation)</option>
+                                    <option value="90">90° (Clockwise)</option>
+                                    <option value="180">180° (Upside down)</option>
+                                    <option value="270">270° (Counter-clockwise)</option>
+                                </select>
+                                <small class="help-text">Rotate captured images</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Image Flipping</label>
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="flipHorizontal">
+                                    <label for="flipHorizontal">Flip Horizontal</label>
+                                </div>
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="flipVertical">
+                                    <label for="flipVertical">Flip Vertical</label>
+                                </div>
+                                <small class="help-text">Mirror image horizontally or vertically</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>📐 Resolution Override</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Custom Width</label>
+                                <input type="number" id="resolutionWidth" value="1920" min="320" max="4096">
+                                <small class="help-text">Custom image width (overrides quality setting)</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Custom Height</label>
+                                <input type="number" id="resolutionHeight" value="1080" min="240" max="2160">
+                                <small class="help-text">Custom image height (overrides quality setting)</small>
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="config-section">
-                    <h3>📅 Daily Schedule</h3>
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="scheduleEnabled">
-                        <label for="scheduleEnabled">Enable Daily Schedule</label>
+                <!-- Video Settings Tab -->
+                <div id="tab-video" class="tab-content">
+                    <div class="config-section">
+                        <h3>🎬 Video Generation</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Frame Rate (FPS)</label>
+                                <select id="videoFps">
+                                    <option value="12">12 FPS (Stop Motion Style)</option>
+                                    <option value="15">15 FPS (Standard Timelapse)</option>
+                                    <option value="20">20 FPS (Smooth Motion)</option>
+                                    <option value="24">24 FPS (Cinematic Standard)</option>
+                                    <option value="25">25 FPS (PAL Standard)</option>
+                                    <option value="30" selected>30 FPS (NTSC Standard)</option>
+                                    <option value="48">48 FPS (High Frame Rate)</option>
+                                    <option value="60">60 FPS (Ultra Smooth)</option>
+                                </select>
+                                <small class="help-text">Frame rate for generated timelapse video</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Video Quality</label>
+                                <select id="videoQuality">
+                                    <option value="low">Low Quality (Smaller Files)</option>
+                                    <option value="medium" selected>Medium Quality (Balanced)</option>
+                                    <option value="high">High Quality (Best Quality)</option>
+                                    <option value="ultra">Ultra Quality (Largest Files)</option>
+                                </select>
+                                <small class="help-text">Quality vs file size trade-off</small>
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-grid">
+
+                    <div class="config-section">
+                        <h3>🎯 Advanced Video Options</h3>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Video Codec</label>
+                                <select id="videoCodec">
+                                    <option value="h264">H.264 (Most Compatible)</option>
+                                    <option value="h265">H.265/HEVC (Better Compression)</option>
+                                    <option value="vp9">VP9 (Open Source)</option>
+                                </select>
+                                <small class="help-text">Video compression format</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Video Bitrate</label>
+                                <select id="videoBitrate">
+                                    <option value="1M">1 Mbps (Very Low Quality)</option>
+                                    <option value="2M">2 Mbps (Low Quality)</option>
+                                    <option value="5M" selected>5 Mbps (Standard Quality)</option>
+                                    <option value="10M">10 Mbps (High Quality)</option>
+                                    <option value="20M">20 Mbps (Very High Quality)</option>
+                                </select>
+                                <small class="help-text">Higher bitrate = better quality, larger files</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>🤖 Automation</h3>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="autoGenerateVideo">
+                            <label for="autoGenerateVideo">Auto-generate video after capture session</label>
+                            <small class="help-text">Automatically create timelapse video when capture stops</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Storage Settings Tab -->
+                <div id="tab-storage" class="tab-content">
+                    <div class="config-section">
+                        <h3>🗄️ Storage Management</h3>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="autoCleanup">
+                            <label for="autoCleanup">Enable Auto-Cleanup</label>
+                            <small class="help-text">Automatically manage storage space</small>
+                        </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label>Maximum Images</label>
+                                <input type="number" id="maxImages" value="1000" min="10" max="10000">
+                                <small class="help-text">Maximum number of images to keep</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Auto-Delete After (Days)</label>
+                                <input type="number" id="cleanupOlderThanDays" value="7" min="1" max="365">
+                                <small class="help-text">Delete images older than X days</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>💾 Storage Limits</h3>
                         <div class="form-group">
-                            <label>Start Time</label>
-                            <input type="time" id="startTime" value="08:00">
+                            <label>Maximum Storage (GB)</label>
+                            <input type="number" id="maxStorageGb" value="10" min="1" max="1000">
+                            <small class="help-text">Maximum storage space for captures</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced Settings Tab -->
+                <div id="tab-advanced" class="tab-content">
+                    <div class="config-section">
+                        <h3>⚡ Performance</h3>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="enableHardwareAcceleration">
+                            <label for="enableHardwareAcceleration">Enable Hardware Acceleration</label>
+                            <small class="help-text">Use GPU acceleration for video encoding (if available)</small>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>🐛 Debug & Logging</h3>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="debugMode">
+                            <label for="debugMode">Enable Debug Mode</label>
+                            <small class="help-text">More verbose logging for troubleshooting</small>
                         </div>
                         <div class="form-group">
-                            <label>Stop Time</label>
-                            <input type="time" id="stopTime" value="18:00">
+                            <label>Log Level</label>
+                            <select id="logLevel">
+                                <option value="error">Error (Only Errors)</option>
+                                <option value="warn">Warning (Warnings & Errors)</option>
+                                <option value="info" selected>Info (General Information)</option>
+                                <option value="debug">Debug (Detailed Debugging)</option>
+                                <option value="trace">Trace (Very Detailed)</option>
+                            </select>
+                            <small class="help-text">Amount of logging detail</small>
+                        </div>
+                    </div>
+
+                    <div class="config-section">
+                        <h3>🧪 Development</h3>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="mockCamera">
+                            <label for="mockCamera">Mock Camera (Testing)</label>
+                            <small class="help-text">Use simulated camera for development/testing</small>
                         </div>
                     </div>
                 </div>
                 
-                <button class="btn btn-primary" onclick="saveConfig()" style="width: 100%;">
-                    💾 Save Configuration
-                </button>
+                <div class="config-actions">
+                    <button class="btn btn-primary" onclick="saveConfig()" style="width: 100%;">
+                        💾 Save Configuration
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetToDefaults()" style="width: 100%; margin-top: 10px;">
+                        🔄 Reset to Defaults
+                    </button>
+                </div>
 
                 <div class="system-info" id="systemInfo">
                     <div class="info-item">
@@ -140,25 +374,6 @@
 
             <div class="panel">
                 <h2>🎬 Video Generation</h2>
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label>Frame Rate (FPS)</label>
-                        <select id="videoFps">
-                            <option value="24">24 FPS (Cinematic)</option>
-                            <option value="30" selected>30 FPS (Standard)</option>
-                            <option value="60">60 FPS (Smooth)</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Video Quality</label>
-                        <select id="videoQuality">
-                            <option value="high">High Quality</option>
-                            <option value="medium" selected>Medium Quality</option>
-                            <option value="low">Low Quality</option>
-                        </select>
-                    </div>
-                </div>
-                
                 <div class="progress-container" id="videoProgress" style="display: none;">
                     <div class="progress-bar">
                         <div class="progress-fill" id="videoProgressFill"></div>

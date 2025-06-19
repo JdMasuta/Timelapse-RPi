@@ -1,4 +1,4 @@
-// api.js
+// api.js - Enhanced API with comprehensive configuration support
 const socket = io(); // Connects to the Socket.IO server on the same host and port
 
 // Event listeners for incoming data from the server
@@ -21,16 +21,13 @@ socket.on('statusUpdate', (data) => {
 });
 
 socket.on('configUpdate', (config) => {
-    // Update UI elements with received configuration
-    document.getElementById('captureInterval').value = config.captureInterval;
-    document.getElementById('imageQuality').value = config.imageQuality;
-    document.getElementById('streamFps').value = config.streamFps;
-    document.getElementById('streamQuality').value = config.streamQuality;
-    document.getElementById('scheduleEnabled').checked = config.scheduleEnabled;
-    document.getElementById('startTime').value = config.startTime;
-    document.getElementById('stopTime').value = config.stopTime;
-    document.getElementById('videoFps').value = config.videoFps;
-    document.getElementById('videoQuality').value = config.videoQuality;
+    console.log('Received config update:', config);
+    updateUIWithConfig(config);
+});
+
+socket.on('extendedConfigUpdate', (extendedConfig) => {
+    console.log('Received extended config update:', extendedConfig);
+    updateUIWithExtendedConfig(extendedConfig);
 });
 
 socket.on('systemInfoUpdate', (data) => {
@@ -123,9 +120,73 @@ socket.on('imagesCleared', () => {
     `;
 });
 
-// Functions to emit commands to the server
-function saveConfig() {
-    const config = {
+/**
+ * Update UI with basic configuration
+ */
+function updateUIWithConfig(config) {
+    // Basic settings
+    setElementValue('captureInterval', config.captureInterval);
+    setElementValue('imageQuality', config.imageQuality);
+    setElementValue('streamFps', config.streamFps);
+    setElementValue('streamQuality', config.streamQuality);
+    setElementValue('scheduleEnabled', config.scheduleEnabled);
+    setElementValue('startTime', config.startTime);
+    setElementValue('stopTime', config.stopTime);
+    setElementValue('videoFps', config.videoFps);
+    setElementValue('videoQuality', config.videoQuality);
+}
+
+/**
+ * Update UI with extended configuration
+ */
+function updateUIWithExtendedConfig(extendedConfig) {
+    // Update basic config first
+    updateUIWithConfig(extendedConfig);
+    
+    // Extended settings
+    setElementValue('videoCodec', extendedConfig.videoCodec);
+    setElementValue('videoBitrate', extendedConfig.videoBitrate);
+    setElementValue('cameraType', extendedConfig.cameraType);
+    setElementValue('cameraDevice', extendedConfig.cameraDevice);
+    setElementValue('resolutionWidth', extendedConfig.resolutionWidth);
+    setElementValue('resolutionHeight', extendedConfig.resolutionHeight);
+    setElementValue('rotation', extendedConfig.rotation);
+    setElementValue('flipHorizontal', extendedConfig.flipHorizontal);
+    setElementValue('flipVertical', extendedConfig.flipVertical);
+    setElementValue('autoCleanup', extendedConfig.autoCleanup);
+    setElementValue('maxImages', extendedConfig.maxImages);
+    setElementValue('cleanupOlderThanDays', extendedConfig.cleanupOlderThanDays);
+    setElementValue('autoGenerateVideo', extendedConfig.autoGenerateVideo);
+    setElementValue('enableHardwareAcceleration', extendedConfig.enableHardwareAcceleration);
+    setElementValue('debugMode', extendedConfig.debugMode);
+    setElementValue('logLevel', extendedConfig.logLevel);
+    setElementValue('mockCamera', extendedConfig.mockCamera);
+    setElementValue('maxStorageGb', extendedConfig.maxStorageGb);
+}
+
+/**
+ * Helper function to set element value safely
+ */
+function setElementValue(elementId, value) {
+    const element = document.getElementById(elementId);
+    if (!element) {
+        console.warn(`Element with ID '${elementId}' not found`);
+        return;
+    }
+    
+    if (element.type === 'checkbox') {
+        element.checked = Boolean(value);
+    } else {
+        element.value = value || '';
+    }
+}
+
+/**
+ * Get all configuration values from UI
+ */
+function getAllConfigValues() {
+    return {
+        // Basic settings
         captureInterval: parseInt(document.getElementById('captureInterval').value),
         imageQuality: document.getElementById('imageQuality').value,
         streamFps: parseInt(document.getElementById('streamFps').value),
@@ -134,11 +195,90 @@ function saveConfig() {
         startTime: document.getElementById('startTime').value,
         stopTime: document.getElementById('stopTime').value,
         videoFps: parseInt(document.getElementById('videoFps').value),
-        videoQuality: document.getElementById('videoQuality').value
+        videoQuality: document.getElementById('videoQuality').value,
+        
+        // Extended settings
+        videoCodec: getElementValue('videoCodec'),
+        videoBitrate: getElementValue('videoBitrate'),
+        cameraType: getElementValue('cameraType'),
+        cameraDevice: getElementValue('cameraDevice'),
+        resolutionWidth: parseInt(getElementValue('resolutionWidth')),
+        resolutionHeight: parseInt(getElementValue('resolutionHeight')),
+        rotation: parseInt(getElementValue('rotation')),
+        flipHorizontal: getElementChecked('flipHorizontal'),
+        flipVertical: getElementChecked('flipVertical'),
+        autoCleanup: getElementChecked('autoCleanup'),
+        maxImages: parseInt(getElementValue('maxImages')),
+        cleanupOlderThanDays: parseInt(getElementValue('cleanupOlderThanDays')),
+        autoGenerateVideo: getElementChecked('autoGenerateVideo'),
+        enableHardwareAcceleration: getElementChecked('enableHardwareAcceleration'),
+        debugMode: getElementChecked('debugMode'),
+        logLevel: getElementValue('logLevel'),
+        mockCamera: getElementChecked('mockCamera'),
+        maxStorageGb: parseInt(getElementValue('maxStorageGb'))
     };
-    socket.emit('saveConfig', config);
 }
 
+/**
+ * Helper function to get element value safely
+ */
+function getElementValue(elementId) {
+    const element = document.getElementById(elementId);
+    return element ? element.value : '';
+}
+
+/**
+ * Helper function to get checkbox state safely
+ */
+function getElementChecked(elementId) {
+    const element = document.getElementById(elementId);
+    return element ? element.checked : false;
+}
+
+/**
+ * Save configuration with enhanced error handling and feedback
+ */
+function saveConfig() {
+    const configData = getAllConfigValues();
+    
+    // Add loading state
+    const saveButton = document.querySelector('.config-actions .btn-primary');
+    const originalText = saveButton.textContent;
+    saveButton.textContent = '💾 Saving...';
+    saveButton.disabled = true;
+    saveButton.classList.add('loading');
+    
+    console.log('Saving extended configuration:', configData);
+    
+    // Emit extended configuration
+    socket.emit('saveExtendedConfig', configData);
+    
+    // Reset button after timeout
+    setTimeout(() => {
+        saveButton.textContent = originalText;
+        saveButton.disabled = false;
+        saveButton.classList.remove('loading');
+    }, 2000);
+}
+
+/**
+ * Reset configuration to defaults
+ */
+function resetToDefaults() {
+    if (confirm('Are you sure you want to reset all settings to defaults? This action cannot be undone.')) {
+        socket.emit('resetConfigToDefaults');
+        showNotification('Configuration reset to defaults', 'info');
+    }
+}
+
+/**
+ * Request initial extended configuration
+ */
+function requestExtendedConfig() {
+    socket.emit('requestExtendedConfig');
+}
+
+// Functions to emit commands to the server (existing functions)
 function startCapture() {
     socket.emit('startCapture');
 }
@@ -157,31 +297,22 @@ function generateVideo() {
 
 function refreshImages() {
     socket.emit('refreshImages');
-    // In a real app, the server would send back the list of images
-    // For now, it just triggers a notification
 }
 
 function clearImages() {
-    // Show a confirmation dialog (custom modal, as alert() is not allowed)
-    showCustomConfirm('Are you sure you want to clear ALL captured images?', () => {
+    if (confirm('Are you sure you want to clear ALL captured images? This action cannot be undone.')) {
         socket.emit('clearImages');
-    });
+    }
 }
 
 function refreshVideos() {
     socket.emit('refreshVideos');
-    // In a real app, the server would send back the list of videos
-    // For now, it just triggers a notification
 }
 
-// Function to simulate a custom confirmation modal
-function showCustomConfirm(message, onConfirm) {
-    // This is a simplified representation. In a real app, you'd create
-    // a proper modal dialog in HTML/CSS/JS.
-    console.log(`Confirmation: ${message}`);
-    // For demonstration, we'll auto-confirm.
-    // In a production app, you'd show a modal and wait for user input.
-    if (confirm(message)) { // Using built-in confirm for now as a placeholder
-        onConfirm();
-    }
-}
+// Request extended configuration on page load
+document.addEventListener('DOMContentLoaded', () => {
+    // Request extended configuration after a short delay to ensure socket is connected
+    setTimeout(() => {
+        requestExtendedConfig();
+    }, 500);
+});

@@ -86,6 +86,15 @@ async function initializeApp() {
                 nextCapture: status.isCapturing ? `in ${currentConfig.captureInterval}s` : '--'
             });
             socket.emit('configUpdate', currentConfig);
+            
+            // Send extended configuration to new clients
+            try {
+                const fullExtendedConfig = configService.getExtendedConfig(fullConfig);
+                socket.emit('extendedConfigUpdate', fullExtendedConfig);
+            } catch (error) {
+                console.error('Error sending initial extended config:', error);
+            }
+            
             // Also send the current stream status and URL if streaming is active
             if (cameraService.isStreamActive()) {
                 socket.emit('streamStatusUpdate', 'Streaming');
@@ -114,6 +123,66 @@ async function initializeApp() {
                 } catch (error) {
                     console.error('Error saving configuration:', error);
                     socket.emit('notification', { message: `Failed to save configuration: ${error.message}`, type: 'error' });
+                }
+            });
+
+            // Handle extended config saving with full validation
+            socket.on('saveExtendedConfig', async (extendedConfig) => {
+                try {
+                    console.log('Saving extended config:', extendedConfig);
+                    
+                    // Update configuration persistently using ConfigService
+                    await configService.updateExtendedConfig(extendedConfig);
+                    
+                    // Reload the full configuration
+                    fullConfig = await configService.loadConfig();
+                    currentConfig = configService.getLegacyConfig(fullConfig);
+                    const fullExtendedConfig = configService.getExtendedConfig(fullConfig);
+                    
+                    // Update all clients with new config
+                    io.emit('configUpdate', currentConfig);
+                    io.emit('extendedConfigUpdate', fullExtendedConfig);
+                    socket.emit('notification', { message: 'Extended configuration saved and persisted!', type: 'success' });
+                    socket.emit('configSaved'); // Signal successful save
+                } catch (error) {
+                    console.error('Error saving extended configuration:', error);
+                    socket.emit('notification', { message: `Failed to save extended configuration: ${error.message}`, type: 'error' });
+                }
+            });
+
+            // Handle request for extended configuration
+            socket.on('requestExtendedConfig', () => {
+                try {
+                    const fullExtendedConfig = configService.getExtendedConfig(fullConfig);
+                    socket.emit('extendedConfigUpdate', fullExtendedConfig);
+                    console.log('Sent extended configuration to client');
+                } catch (error) {
+                    console.error('Error sending extended configuration:', error);
+                    socket.emit('notification', { message: 'Failed to load extended configuration', type: 'error' });
+                }
+            });
+
+            // Handle reset to defaults
+            socket.on('resetConfigToDefaults', async () => {
+                try {
+                    console.log('Resetting configuration to defaults...');
+                    
+                    // Generate default .env content
+                    const defaultEnvContent = configService.generateDefaultEnvContent();
+                    await configService.writeEnvFile(configService.parseEnvContent(defaultEnvContent));
+                    
+                    // Reload configuration
+                    fullConfig = await configService.loadConfig();
+                    currentConfig = configService.getLegacyConfig(fullConfig);
+                    const fullExtendedConfig = configService.getExtendedConfig(fullConfig);
+                    
+                    // Update all clients
+                    io.emit('configUpdate', currentConfig);
+                    io.emit('extendedConfigUpdate', fullExtendedConfig);
+                    socket.emit('notification', { message: 'Configuration reset to defaults!', type: 'success' });
+                } catch (error) {
+                    console.error('Error resetting configuration:', error);
+                    socket.emit('notification', { message: `Failed to reset configuration: ${error.message}`, type: 'error' });
                 }
             });
 
