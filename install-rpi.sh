@@ -22,9 +22,10 @@ sudo apt update && sudo apt upgrade -y
 
 # Install Node.js if not present
 if ! command -v node &> /dev/null; then
-    echo "📦 Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt-get install -y nodejs
+    echo "📦 Installing Node.js V22 via nvm..."
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+    \. "$HOME/.nvm/nvm.sh"
+    nvm install 22
 else
     echo "✅ Node.js already installed: $(node --version)"
 fi
@@ -35,8 +36,8 @@ sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++
 
 # Install/Build MJPG-Streamer
 echo "🎥 Installing MJPG-Streamer..."
-if [ ! -d "~/mjpg-streamer" ]; then
-    cd ~/
+if [ ! -d "/usr/local/bin/mjpg-streamer" ]; then
+    cd /tmp/
     git clone https://github.com/jacksonliam/mjpg-streamer.git
     cd mjpg-streamer/mjpg-streamer-experimental
     make
