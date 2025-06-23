@@ -35,8 +35,8 @@ sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++
 
 # Install/Build MJPG-Streamer
 echo "🎥 Installing MJPG-Streamer..."
-if [ ! -d "/tmp/mjpg-streamer" ]; then
-    cd /tmp
+if [ ! -d "~/mjpg-streamer" ]; then
+    cd ~/
     git clone https://github.com/jacksonliam/mjpg-streamer.git
     cd mjpg-streamer/mjpg-streamer-experimental
     make
@@ -58,7 +58,10 @@ mkdir -p captures logs
 # Copy environment file
 if [ ! -f .env ]; then
     echo "⚙️  Setting up environment configuration..."
-    cp .env.example .env
+    if [ -f .env.example]; then
+        cp .env.example .env
+    else
+        echo "❌ .env.example does not exist!"
     echo "✅ Created .env file - please configure it for your setup"
 else
     echo "✅ .env file already exists"
