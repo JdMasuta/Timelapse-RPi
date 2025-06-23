@@ -76,7 +76,7 @@ else
 fi
 
 # Return to project directory
-cd "$OLDPWD/Timelapse-RPi" || {
+cd /home/access/Timelapse-RPi || {
     echo "❌ Timelapse-RPi directory not found in previous working dir"
     exit 1
 }
