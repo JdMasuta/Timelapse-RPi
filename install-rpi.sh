@@ -22,7 +22,7 @@ ping -c 1 google.com &>/dev/null || {
 echo "📦 Updating system packages..."
 sudo apt update && sudo apt upgrade -y
 
-# Install Node.js using NVM if needed
+# Check and install correct Node.js version
 NODE_OK=false
 if command -v node &> /dev/null; then
     NODE_VERSION=$(node --version | sed 's/v//')
@@ -31,7 +31,7 @@ if command -v node &> /dev/null; then
         echo "✅ Node.js $NODE_VERSION already installed"
         NODE_OK=true
     else
-        echo "⚠️  Node.js version $NODE_VERSION is too old. Installing Node.js v22..."
+        echo "⚠️  Installed Node.js is too old. Installing v22..."
     fi
 fi
 
@@ -41,28 +41,45 @@ if [ "$NODE_OK" = false ]; then
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     nvm install 22 || {
-        echo "❌ Failed to install Node.js. Please install it manually and re-run this script."
+        echo "❌ Node.js install failed. Please install manually."
         exit 1
     }
 fi
+echo "✅ Node.js installed successfully"
 
 # Install dependencies
 echo "📦 Installing system dependencies..."
 sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++
 
-# MJPG-Streamer (no service setup)
-echo "🎥 Installing MJPG-Streamer (manual only)..."
-if [ ! -d "/usr/local/bin/mjpg-streamer" ]; then
-    cd /tmp/
-    git clone https://github.com/jacksonliam/mjpg-streamer.git
-    cd mjpg-streamer/mjpg-streamer-experimental
-    make && sudo make install
+# Clone or update MJPG-Streamer
+echo "🎥 Preparing MJPG-Streamer..."
+cd /tmp/
+if [ -d "mjpg-streamer" ]; then
+    echo "🔁 Updating existing MJPG-Streamer repo..."
+    cd mjpg-streamer
+    git pull
 else
-    echo "✅ MJPG-Streamer source already exists"
+    echo "⬇️ Cloning MJPG-Streamer repo..."
+    git clone https://github.com/jacksonliam/mjpg-streamer.git
+    cd mjpg-streamer
 fi
 
-# Return to original directory
-cd "$OLDPWD" || exit 1
+cd mjpg-streamer-experimental
+
+# Build only if binary not already present
+if [ ! -f "/usr/local/bin/mjpg_streamer" ]; then
+    echo "⚙️  Building MJPG-Streamer..."
+    make && sudo make install
+    echo "✅ MJPG-Streamer installed"
+else
+    echo "✅ MJPG-Streamer already built and installed"
+fi
+
+# Return to project directory
+cd "$OLDPWD/Timelapse-RPi" || {
+    echo "❌ Timelapse-RPi directory not found in previous working dir"
+    exit 1
+}
 
 # Check required files
 if [ ! -f "server.js" ]; then
