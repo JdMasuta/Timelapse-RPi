@@ -1,4 +1,4 @@
-// Updated cameraService.js with operation queue integration
+// Fixed cameraService.js with proper separation of queue management and stream control
 const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const fs = require("fs").promises;
@@ -83,6 +83,10 @@ class CameraService {
     return resolutions[quality] || resolutions.medium;
   }
 
+  // ============================================================================
+  // QUEUE MANAGEMENT METHODS (High-level operation scheduling)
+  // ============================================================================
+
   async queueOperation(type, config, callbacks = {}, priority) {
     const operation = new OperationContext(type, config, callbacks, priority);
 
@@ -134,7 +138,7 @@ class CameraService {
     switch (op.type) {
       case "stream":
         op.progress.wasActive = this.isStreamActive();
-        if (op.progress.wasActive) await this.stopStream();
+        if (op.progress.wasActive) this._directStopStream();
         break;
       case "timelapse":
         op.progress.imageCount = this.imageCount;
@@ -166,6 +170,18 @@ class CameraService {
     op.callbacks.onNotification?.("resumed", `${op.type} resumed`);
   }
 
+  async continueNextOperation() {
+    // Only process next operation if no current operation is running
+    if (!this.currentOperation && this.operationQueue.length > 0) {
+      const nextOp = this.operationQueue.dequeue();
+      await this.resumeOperation(nextOp);
+    }
+  }
+
+  // ============================================================================
+  // PUBLIC API METHODS (Queue-based operation requests)
+  // ============================================================================
+
   async captureImage(config, notifyCallback = null) {
     await this.queueOperation(
       "capture",
@@ -173,6 +189,93 @@ class CameraService {
       { onNotification: notifyCallback },
       OPERATION_PRIORITIES.USER_CAPTURE
     );
+  }
+
+  async startTimelapse(
+    config,
+    onImageCaptured,
+    onError,
+    onStreamNotification = null
+  ) {
+    await this.queueOperation(
+      "timelapse",
+      config,
+      { onImageCaptured, onError, onNotification: onStreamNotification },
+      OPERATION_PRIORITIES.TIMELAPSE
+    );
+  }
+
+  async startStream(config, onNotification = null) {
+    await this.queueOperation(
+      "stream",
+      config,
+      { onNotification },
+      OPERATION_PRIORITIES.STREAM
+    );
+  }
+
+  async stopStream() {
+    if (this.streamProcess) {
+      this.streamProcess.kill("SIGKILL");
+      this.streamProcess = null;
+    }
+    // FIXED: Removed continueNextOperation() call to prevent race conditions
+    return true;
+  }
+
+  // ============================================================================
+  // PRIVATE DIRECT STREAM CONTROL (Low-level resource management)
+  // ============================================================================
+
+  async _directStartStream(config, onNotification = null) {
+    if (this.streamProcess || this.isCapturing) return;
+
+    this.currentStreamConfig = { ...config };
+    const resolution = this.getResolutionForQuality(config.streamQuality);
+
+    this.streamProcess = spawn(this.mjpegStreamerPath, [
+      "-i",
+      `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,
+      "-o",
+      `output_http.so -w ${this.mjpegStreamerWwwPath} -p 8080`,
+    ]);
+
+    let ready = false;
+    this.streamProcess.stderr.on("data", (data) => {
+      const output = data.toString();
+      if (output.includes("o: commands.............: enabled") && !ready) {
+        ready = true;
+        onNotification?.("stream-ready", "Live preview is ready");
+      }
+    });
+
+    this.streamProcess.on("error", (err) => {
+      this.streamProcess = null;
+      onNotification?.("stream-error", err.message);
+    });
+
+    this.streamProcess.on("close", () => {
+      this.streamProcess = null;
+      onNotification?.("stream-stopped", "Live preview stopped");
+    });
+  }
+
+  _directStopStream() {
+    if (this.streamProcess) {
+      this.streamProcess.kill("SIGKILL");
+      this.streamProcess = null;
+      return true;
+    }
+    return false;
+  }
+
+  // ============================================================================
+  // OPERATION IMPLEMENTATIONS (Using direct control methods)
+  // ============================================================================
+
+  async _doStartStream(op) {
+    // Use direct method for queue-managed stream operations
+    await this._directStartStream(op.config, op.callbacks.onNotification);
   }
 
   async _doCaptureImage(op) {
@@ -191,7 +294,7 @@ class CameraService {
           "stream-paused",
           "Live preview paused for image capture..."
         );
-        await this.stopStream();
+        this._directStopStream(); // FIXED: Use direct method, not queue method
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
 
@@ -204,25 +307,15 @@ class CameraService {
       throw error;
     } finally {
       if (wasStreamActive && streamConfig) {
-        await this.startStream(streamConfig, op.callbacks.onNotification);
+        // FIXED: Use direct method to restart stream immediately
+        await this._directStartStream(
+          streamConfig,
+          op.callbacks.onNotification
+        );
       }
       this.currentOperation = null;
       await this.continueNextOperation();
     }
-  }
-
-  async startTimelapse(
-    config,
-    onImageCaptured,
-    onError,
-    onStreamNotification = null
-  ) {
-    await this.queueOperation(
-      "timelapse",
-      config,
-      { onImageCaptured, onError, onNotification: onStreamNotification },
-      OPERATION_PRIORITIES.TIMELAPSE
-    );
   }
 
   async _doStartTimelapse(op) {
@@ -239,8 +332,9 @@ class CameraService {
       if (!this.isCapturing) return;
 
       try {
+        // FIXED: Use direct stream control methods to avoid queue conflicts
         if (wasStreamActive && streamConfig) {
-          await this.stopStream();
+          this._directStopStream(); // Direct stop, no queue interference
           await new Promise((res) => setTimeout(res, 500));
         }
 
@@ -264,8 +358,12 @@ class CameraService {
         op.callbacks.onError?.(err);
       }
 
+      // FIXED: Use direct stream restart - no more queue conflicts!
       if (this.isCapturing && wasStreamActive && streamConfig) {
-        await this.startStream(streamConfig, op.callbacks.onNotification);
+        await this._directStartStream(
+          streamConfig,
+          op.callbacks.onNotification
+        );
       }
 
       if (this.isCapturing) {
@@ -276,49 +374,9 @@ class CameraService {
     loop();
   }
 
-  async startStream(config, onNotification = null) {
-    await this.queueOperation(
-      "stream",
-      config,
-      { onNotification },
-      OPERATION_PRIORITIES.STREAM
-    );
-  }
-
-  async _doStartStream(op) {
-    if (this.streamProcess || this.isCapturing) return;
-
-    const config = op.config;
-    this.currentStreamConfig = { ...config };
-
-    const resolution = this.getResolutionForQuality(config.streamQuality);
-
-    this.streamProcess = spawn(this.mjpegStreamerPath, [
-      "-i",
-      `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,
-      "-o",
-      `output_http.so -w ${this.mjpegStreamerWwwPath} -p 8080`,
-    ]);
-
-    let ready = false;
-    this.streamProcess.stderr.on("data", (data) => {
-      const output = data.toString();
-      if (output.includes("o: commands.............: enabled") && !ready) {
-        ready = true;
-        op.callbacks.onNotification?.("stream-ready", "Live preview is ready");
-      }
-    });
-
-    this.streamProcess.on("error", (err) => {
-      this.streamProcess = null;
-      op.callbacks.onNotification?.("stream-error", err.message);
-    });
-
-    this.streamProcess.on("close", () => {
-      this.streamProcess = null;
-      op.callbacks.onNotification?.("stream-stopped", "Live preview stopped");
-    });
-  }
+  // ============================================================================
+  // TIMELAPSE CONTROL METHODS
+  // ============================================================================
 
   stopTimelapse() {
     if (!this.isCapturing) return false;
@@ -328,14 +386,9 @@ class CameraService {
     return true;
   }
 
-  async stopStream() {
-    if (this.streamProcess) {
-      this.streamProcess.kill("SIGKILL");
-      this.streamProcess = null;
-    }
-    await this.continueNextOperation();
-    return true;
-  }
+  // ============================================================================
+  // UTILITY AND STATUS METHODS
+  // ============================================================================
 
   getSessionTime() {
     if (!this.sessionStartTime) return "00:00:00";
@@ -407,13 +460,6 @@ class CameraService {
   cleanup() {
     this.stopTimelapse();
     this.stopStream();
-  }
-
-  async continueNextOperation() {
-    if (!this.currentOperation && this.operationQueue.length > 0) {
-      const nextOp = this.operationQueue.dequeue();
-      await this.resumeOperation(nextOp);
-    }
   }
 }
 
