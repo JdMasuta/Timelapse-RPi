@@ -1,3 +1,4 @@
+// Updated cameraService.js with operation queue integration
 const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const fs = require("fs").promises;
@@ -97,13 +98,13 @@ class CameraService {
 
     switch (operation.type) {
       case "stream":
-        await this._startStream(operation);
+        await this._doStartStream(operation);
         break;
       case "timelapse":
-        await this._startTimelapse(operation);
+        await this._doStartTimelapse(operation);
         break;
       case "capture":
-        await this._performCapture(operation);
+        await this._doCaptureImage(operation);
         break;
     }
   }
@@ -137,12 +138,12 @@ class CameraService {
 
     switch (op.type) {
       case "stream":
-        if (op.progress.wasActive) await this._startStream(op);
+        if (op.progress.wasActive) await this._doStartStream(op);
         break;
       case "timelapse":
         this.imageCount = op.progress.imageCount || 0;
         this.sessionStartTime = op.progress.sessionStartTime || Date.now();
-        await this._startTimelapse(op);
+        await this._doStartTimelapse(op);
         break;
     }
 
@@ -158,8 +159,8 @@ class CameraService {
     );
   }
 
-  async _performCapture(operation) {
-    const { config, callbacks } = operation;
+  async _doCaptureImage(op) {
+    const config = op.config;
     const resolution = this.getResolutionForQuality(config.imageQuality);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `timelapse_${timestamp}.jpg`;
@@ -170,7 +171,7 @@ class CameraService {
 
     try {
       if (wasStreamActive) {
-        callbacks.onNotification?.(
+        op.callbacks.onNotification?.(
           "stream-paused",
           "Live preview paused for image capture..."
         );
@@ -178,50 +179,52 @@ class CameraService {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
 
-      await execAsync(`fswebcam -r ${resolution} --no-banner "${filepath}"`);
-      callbacks.onNotification?.("captured", filename);
+      const cmd = `fswebcam -r ${resolution} --no-banner "${filepath}"`;
+      await execAsync(cmd);
+
+      op.callbacks.onNotification?.("image-captured", filename);
     } catch (error) {
-      console.error("Capture failed:", error);
-      callbacks.onNotification?.("capture-error", error.message);
+      op.callbacks.onNotification?.("capture-error", error.message);
+      throw error;
     } finally {
       if (wasStreamActive && streamConfig) {
-        try {
-          await this._startStream(
-            new OperationContext(
-              "stream",
-              streamConfig,
-              callbacks,
-              OPERATION_PRIORITIES.STREAM
-            )
-          );
-        } catch (streamError) {
-          console.error("Failed to restart stream:", streamError);
-          callbacks.onNotification?.("stream-error", streamError.message);
-        }
+        await this.startStream(streamConfig, op.callbacks.onNotification);
       }
-
-      this.currentOperation = null;
     }
   }
 
-  async _startTimelapse(operation) {
-    const { config, callbacks } = operation;
+  async startTimelapse(
+    config,
+    onImageCaptured,
+    onError,
+    onStreamNotification = null
+  ) {
+    await this.queueOperation(
+      "timelapse",
+      config,
+      { onImageCaptured, onError, onNotification: onStreamNotification },
+      OPERATION_PRIORITIES.TIMELAPSE
+    );
+  }
+
+  async _doStartTimelapse(op) {
     if (this.isCapturing) return;
     this.isCapturing = true;
     this.imageCount = 0;
     this.sessionStartTime = Date.now();
 
+    const config = op.config;
     const loop = async () => {
       if (!this.isCapturing) return;
       try {
-        await this.captureImage(config, callbacks.onNotification);
+        await this._doCaptureImage(op);
         this.imageCount++;
-        callbacks.onImageCaptured?.({
+        op.callbacks.onImageCaptured?.({
           imageCount: this.imageCount,
           sessionTime: this.getSessionTime(),
         });
       } catch (err) {
-        callbacks.onError?.(err);
+        op.callbacks.onError?.(err);
       }
       if (this.isCapturing) {
         this.captureInterval = setTimeout(loop, config.captureInterval * 1000);
@@ -230,53 +233,62 @@ class CameraService {
     loop();
   }
 
-  async _startStream(operation) {
-    const { config, callbacks } = operation;
+  async startStream(config, onNotification = null) {
+    await this.queueOperation(
+      "stream",
+      config,
+      { onNotification },
+      OPERATION_PRIORITIES.STREAM
+    );
+  }
 
-    try {
-      const resolution = this.getResolutionForQuality(config.streamQuality);
-      this.streamProcess = spawn(this.mjpegStreamerPath, [
-        "-i",
-        `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,
-        "-o",
-        `output_http.so -w ${this.mjpegStreamerWwwPath} -p 8080`,
-      ]);
+  async _doStartStream(op) {
+    if (this.streamProcess || this.isCapturing) return;
 
-      this.currentStreamConfig = { ...config };
+    const config = op.config;
+    this.currentStreamConfig = { ...config };
 
-      let streamReadyEmitted = false;
-      this.streamProcess.stderr.on("data", (data) => {
-        const output = data.toString();
-        if (output.includes("o: commands") && !streamReadyEmitted) {
-          streamReadyEmitted = true;
-          callbacks.onNotification?.("stream-ready", "Live preview is ready");
-        }
-      });
+    const resolution = this.getResolutionForQuality(config.streamQuality);
 
-      this.streamProcess.on("error", (err) => {
-        console.error("Stream error:", err);
-        this.streamProcess = null;
-        callbacks.onNotification?.("stream-error", err.message);
-      });
+    this.streamProcess = spawn(this.mjpegStreamerPath, [
+      "-i",
+      `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,
+      "-o",
+      `output_http.so -w ${this.mjpegStreamerWwwPath} -p 8080`,
+    ]);
 
-      this.streamProcess.on("close", () => {
-        this.streamProcess = null;
-        callbacks.onNotification?.("stream-stopped", "Stream closed");
-      });
-    } catch (error) {
-      throw error;
-    }
+    let ready = false;
+    this.streamProcess.stderr.on("data", (data) => {
+      const output = data.toString();
+      if (output.includes("o: commands.............: enabled") && !ready) {
+        ready = true;
+        op.callbacks.onNotification?.("stream-ready", "Live preview is ready");
+      }
+    });
+
+    this.streamProcess.on("error", (err) => {
+      this.streamProcess = null;
+      op.callbacks.onNotification?.("stream-error", err.message);
+    });
+
+    this.streamProcess.on("close", () => {
+      this.streamProcess = null;
+      op.callbacks.onNotification?.("stream-stopped", "Live preview stopped");
+    });
   }
 
   stopTimelapse() {
+    if (!this.isCapturing) return false;
     this.isCapturing = false;
     if (this.captureInterval) clearTimeout(this.captureInterval);
     return true;
   }
 
-  stopStream() {
-    if (this.streamProcess) this.streamProcess.kill("SIGKILL");
-    this.streamProcess = null;
+  async stopStream() {
+    if (this.streamProcess) {
+      this.streamProcess.kill("SIGKILL");
+      this.streamProcess = null;
+    }
     return true;
   }
 
@@ -301,23 +313,23 @@ class CameraService {
   async getImageList() {
     try {
       const files = await fs.readdir(this.outputDir);
-      const imageFiles = files.filter(
+      const images = files.filter(
         (f) => f.endsWith(".jpg") || f.endsWith(".jpeg")
       );
       const list = await Promise.all(
-        imageFiles.map(async (f) => {
-          const stat = await fs.stat(path.join(this.outputDir, f));
+        images.map(async (file) => {
+          const stat = await fs.stat(path.join(this.outputDir, file));
           return {
-            filename: f,
-            filepath: path.join(this.outputDir, f),
+            filename: file,
+            filepath: path.join(this.outputDir, file),
             size: stat.size,
             created: stat.birthtime,
           };
         })
       );
       return list.sort((a, b) => b.created - a.created);
-    } catch (e) {
-      console.error("Failed to get image list:", e);
+    } catch (err) {
+      console.error("Failed to list images:", err);
       return [];
     }
   }
@@ -325,17 +337,17 @@ class CameraService {
   async clearImages() {
     try {
       const files = await fs.readdir(this.outputDir);
-      const imageFiles = files.filter(
+      const targets = files.filter(
         (f) => f.endsWith(".jpg") || f.endsWith(".jpeg")
       );
       await Promise.all(
-        imageFiles.map((f) => fs.unlink(path.join(this.outputDir, f)))
+        targets.map((file) => fs.unlink(path.join(this.outputDir, file)))
       );
       this.imageCount = 0;
-      return imageFiles.length;
-    } catch (e) {
-      console.error("Failed to clear images:", e);
-      throw e;
+      return targets.length;
+    } catch (err) {
+      console.error("Failed to clear images:", err);
+      throw err;
     }
   }
 
@@ -343,8 +355,8 @@ class CameraService {
     return this.currentStreamConfig ? { ...this.currentStreamConfig } : null;
   }
 
-  setStreamProcess(streamProcess) {
-    this.streamProcess = streamProcess;
+  setStreamProcess(proc) {
+    this.streamProcess = proc;
   }
 
   cleanup() {
