@@ -544,13 +544,13 @@ async function initializeApp() {
         streamStatus: cameraService.isStreamActive() ? "Streaming" : "Stopped",
       });
     }, 5000); // Update every 5 seconds
-    setInterval(() => {
-      const status = cameraService.getStatus();
-      ServerLogger.debug(null, "systemStatus", "Periodic status check", {
-        ...status,
-        connectedClients: io.engine.clientsCount,
-      });
-    }, 30000); // Log every 30 seconds
+    // setInterval(() => {
+    //   const status = cameraService.getStatus();
+    //   ServerLogger.debug(null, "systemStatus", "Periodic status check", {
+    //     ...status,
+    //     connectedClients: io.engine.clientsCount,
+    //   });
+    // }, 30000); // Log every 30 seconds
   } catch (error) {
     console.error("Failed to initialize application:", error);
     process.exit(1);
