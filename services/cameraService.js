@@ -42,7 +42,18 @@ class CameraService {
     this.currentStreamConfig = null;
 
     this.operationQueue = new PriorityQueue({
-      comparator: (a, b) => b.priority - a.priority,
+      comparator: (a, b) => {
+        if (
+          !a ||
+          !b ||
+          typeof a.priority !== "number" ||
+          typeof b.priority !== "number"
+        ) {
+          console.error("Invalid operation enqueued:", a, b);
+          return 0;
+        }
+        return b.priority - a.priority;
+      },
     });
     this.currentOperation = null;
     this.operationStates = new Map();
@@ -75,6 +86,10 @@ class CameraService {
     const operation = new OperationContext(type, config, callbacks, priority);
 
     if (!this.currentOperation) {
+      if (!operation || typeof operation.priority !== "number") {
+        console.error("Invalid operation:", operation);
+        return;
+      }
       await this.startOperation(operation);
       return;
     }
@@ -217,7 +232,11 @@ class CameraService {
     const loop = async () => {
       if (!this.isCapturing) return;
       try {
-        await this._doCaptureImage(op);
+        await this._doCaptureImage({
+          ...op,
+          type: "capture",
+          priority: OPERATION_PRIORITIES.USER_CAPTURE,
+        });
         this.imageCount++;
         op.callbacks.onImageCaptured?.({
           imageCount: this.imageCount,
