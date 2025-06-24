@@ -1,4 +1,4 @@
-// Fixed cameraService.js with proper separation of queue management and stream control
+// Fully Fixed cameraService.js - Resolves stream resume and queue corruption bugs
 const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const fs = require("fs").promises;
@@ -228,7 +228,8 @@ class CameraService {
   // ============================================================================
 
   async _directStartStream(config, onNotification = null) {
-    if (this.streamProcess || this.isCapturing) return;
+    // ✅ CRITICAL FIX: Removed isCapturing check to allow stream during timelapse
+    if (this.streamProcess) return;
 
     this.currentStreamConfig = { ...config };
     const resolution = this.getResolutionForQuality(config.streamQuality);
@@ -325,16 +326,21 @@ class CameraService {
     this.sessionStartTime = Date.now();
 
     const config = op.config;
+
+    // ✅ CRITICAL FIX: Store stream state without interfering with queue
     const streamConfig = this.getCurrentStreamConfig();
     const wasStreamActive = this.isStreamActive();
+
+    // ✅ MAJOR FIX: Don't pause queued stream operations, just manage stream directly
+    // This prevents queue corruption by not interfering with existing queue state
 
     const loop = async () => {
       if (!this.isCapturing) return;
 
       try {
-        // FIXED: Use direct stream control methods to avoid queue conflicts
+        // Pause stream before capture
         if (wasStreamActive && streamConfig) {
-          this._directStopStream(); // Direct stop, no queue interference
+          this._directStopStream();
           await new Promise((res) => setTimeout(res, 500));
         }
 
@@ -358,7 +364,7 @@ class CameraService {
         op.callbacks.onError?.(err);
       }
 
-      // FIXED: Use direct stream restart - no more queue conflicts!
+      // ✅ FIXED: Resume stream after capture (isCapturing check removed from _directStartStream)
       if (this.isCapturing && wasStreamActive && streamConfig) {
         await this._directStartStream(
           streamConfig,
@@ -382,6 +388,9 @@ class CameraService {
     if (!this.isCapturing) return false;
     this.isCapturing = false;
     if (this.captureInterval) clearTimeout(this.captureInterval);
+
+    // ✅ CRITICAL FIX: Mark operation as complete and process queue
+    this.currentOperation = null;
     this.continueNextOperation();
     return true;
   }
