@@ -57,6 +57,7 @@ class CameraService {
     });
     this.currentOperation = null;
     this.operationStates = new Map();
+    this.continueNextOperation = this.continueNextOperation.bind(this);
 
     this.ensureOutputDir();
   }
@@ -205,6 +206,8 @@ class CameraService {
       if (wasStreamActive && streamConfig) {
         await this.startStream(streamConfig, op.callbacks.onNotification);
       }
+      this.currentOperation = null;
+      await this.continueNextOperation();
     }
   }
 
@@ -229,26 +232,47 @@ class CameraService {
     this.sessionStartTime = Date.now();
 
     const config = op.config;
+    const streamConfig = this.getCurrentStreamConfig();
+    const wasStreamActive = this.isStreamActive();
+
     const loop = async () => {
       if (!this.isCapturing) return;
+
       try {
-        await this._doCaptureImage({
-          ...op,
-          type: "capture",
-          priority: OPERATION_PRIORITIES.USER_CAPTURE,
-        });
+        if (wasStreamActive && streamConfig) {
+          await this.stopStream();
+          await new Promise((res) => setTimeout(res, 500));
+        }
+
+        const resolution = this.getResolutionForQuality(config.imageQuality);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const filename = `timelapse_${timestamp}.jpg`;
+        const filepath = path.join(this.outputDir, filename);
+
+        const cmd = `fswebcam -r ${resolution} --no-banner "${filepath}"`;
+        await execAsync(cmd);
+
         this.imageCount++;
+        op.callbacks.onNotification?.("image-captured", filename);
         op.callbacks.onImageCaptured?.({
           imageCount: this.imageCount,
           sessionTime: this.getSessionTime(),
+          filename,
+          filepath,
         });
       } catch (err) {
         op.callbacks.onError?.(err);
       }
+
+      if (this.isCapturing && wasStreamActive && streamConfig) {
+        await this.startStream(streamConfig, op.callbacks.onNotification);
+      }
+
       if (this.isCapturing) {
         this.captureInterval = setTimeout(loop, config.captureInterval * 1000);
       }
     };
+
     loop();
   }
 
@@ -300,6 +324,7 @@ class CameraService {
     if (!this.isCapturing) return false;
     this.isCapturing = false;
     if (this.captureInterval) clearTimeout(this.captureInterval);
+    this.continueNextOperation();
     return true;
   }
 
@@ -308,6 +333,7 @@ class CameraService {
       this.streamProcess.kill("SIGKILL");
       this.streamProcess = null;
     }
+    await this.continueNextOperation();
     return true;
   }
 
@@ -381,6 +407,13 @@ class CameraService {
   cleanup() {
     this.stopTimelapse();
     this.stopStream();
+  }
+
+  async continueNextOperation() {
+    if (!this.currentOperation && this.operationQueue.length > 0) {
+      const nextOp = this.operationQueue.dequeue();
+      await this.resumeOperation(nextOp);
+    }
   }
 }
 
