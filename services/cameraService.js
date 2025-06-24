@@ -1,4 +1,4 @@
-// Enhanced cameraService.js with comprehensive logging - Ready for RPi deployment
+// FINAL FIXED cameraService.js - All stream resume and queue issues resolved
 const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const fs = require("fs").promises;
@@ -155,6 +155,19 @@ class CameraService {
       isCapturing: this.isCapturing,
     });
 
+    // ✅ CRITICAL FIX: Prevent duplicate stream operations
+    if (type === "stream" && this.currentOperation?.type === "stream") {
+      Logger.warn(
+        "queueOperation",
+        "Stream operation already running, ignoring duplicate request"
+      );
+      callbacks.onNotification?.(
+        "already-running",
+        "Stream operation already in progress"
+      );
+      return;
+    }
+
     // Validate operation before queuing
     if (!type || typeof priority !== "number") {
       Logger.error("queueOperation", "Invalid operation parameters", {
@@ -275,6 +288,7 @@ class CameraService {
       switch (op.type) {
         case "stream":
           op.progress.wasActive = this.isStreamActive();
+          op.progress.streamConfig = this.getCurrentStreamConfig(); // ✅ CRITICAL FIX: Store config
           if (op.progress.wasActive) {
             Logger.info("pauseCurrentOperation", "Stopping active stream");
             this._directStopStream();
@@ -307,6 +321,9 @@ class CameraService {
       type: op?.type,
       state: op?.state,
       timestamp: op?.timestamp,
+      hasProgress: !!op?.progress,
+      wasActive: op?.progress?.wasActive,
+      hasStreamConfig: !!op?.progress?.streamConfig,
     });
 
     // Validate operation before resuming
@@ -321,10 +338,12 @@ class CameraService {
 
       switch (op.type) {
         case "stream":
-          if (op.progress.wasActive) {
-            Logger.info("resumeOperation", "Resuming stream operation");
-            await this._doStartStream(op);
-          }
+          // ✅ CRITICAL FIX: Always restart stream operations, regardless of wasActive
+          Logger.info(
+            "resumeOperation",
+            "Resuming stream operation - calling _doStartStream"
+          );
+          await this._doStartStream(op);
           break;
         case "timelapse":
           this.imageCount = op.progress.imageCount || 0;
@@ -440,6 +459,14 @@ class CameraService {
       this.streamProcess = null;
       Logger.info("stopStream", "Stream process terminated");
     }
+
+    // ✅ CRITICAL FIX: Clear stream operations from queue and mark current as complete
+    if (this.currentOperation?.type === "stream") {
+      this.currentOperation = null;
+      Logger.info("stopStream", "Cleared current stream operation");
+      await this.continueNextOperation();
+    }
+
     return true;
   }
 
@@ -454,7 +481,7 @@ class CameraService {
       config,
     });
 
-    // Only check for existing process, not isCapturing (this was the bug!)
+    // Only check for existing process
     if (this.streamProcess) {
       Logger.warn(
         "_directStartStream",
@@ -594,6 +621,15 @@ class CameraService {
     Logger.info("_doStartStream", "Queue-managed stream operation starting");
     // Use direct method for queue-managed stream operations
     await this._directStartStream(op.config, op.callbacks.onNotification);
+
+    // ✅ CRITICAL FIX: Mark stream operation as complete after starting
+    // Stream operations are "fire and forget" - once started, they run indefinitely
+    Logger.info(
+      "_doStartStream",
+      "Stream started successfully, marking operation complete"
+    );
+    this.currentOperation = null;
+    await this.continueNextOperation();
   }
 
   async _doCaptureImage(op) {
@@ -668,15 +704,15 @@ class CameraService {
 
       const config = op.config;
 
-      // Store stream state without interfering with queue
-      const streamConfig = this.getCurrentStreamConfig();
-      const wasStreamActive = this.isStreamActive();
+      // ✅ CRITICAL FIX: Store ACTUAL stream state at timelapse start
+      const streamWasActiveAtStart = this.isStreamActive();
+      const streamConfigAtStart = this.getCurrentStreamConfig();
 
       Logger.info("_doStartTimelapse", "Timelapse configuration", {
         captureInterval: config.captureInterval,
         imageQuality: config.imageQuality,
-        wasStreamActive,
-        hasStreamConfig: !!streamConfig,
+        streamWasActiveAtStart,
+        hasStreamConfig: !!streamConfigAtStart,
       });
 
       const loop = async () => {
@@ -690,7 +726,7 @@ class CameraService {
 
         try {
           // Pause stream before capture
-          if (wasStreamActive && streamConfig) {
+          if (streamWasActiveAtStart && streamConfigAtStart) {
             Logger.debug("_doStartTimelapse", "Pausing stream for capture");
             this._directStopStream();
             await new Promise((res) => setTimeout(res, 500));
@@ -728,11 +764,11 @@ class CameraService {
           op.callbacks.onError?.(err);
         }
 
-        // Resume stream after capture
-        if (this.isCapturing && wasStreamActive && streamConfig) {
+        // ✅ CRITICAL FIX: Resume stream after capture using stored state
+        if (this.isCapturing && streamWasActiveAtStart && streamConfigAtStart) {
           Logger.debug("_doStartTimelapse", "Resuming stream after capture");
           await this._directStartStream(
-            streamConfig,
+            streamConfigAtStart,
             op.callbacks.onNotification
           );
         }
