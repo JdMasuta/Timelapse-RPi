@@ -1,4 +1,4 @@
-// FULLY FIXED cameraService.js - All queue crashes and stream resume bugs resolved
+// Enhanced cameraService.js with comprehensive logging - Ready for RPi deployment
 const { spawn, exec } = require("child_process");
 const { promisify } = require("util");
 const fs = require("fs").promises;
@@ -13,6 +13,43 @@ const OPERATION_PRIORITIES = {
   TIMELAPSE: 60,
   STREAM: 20,
 };
+
+// Enhanced logging utility
+class Logger {
+  static log(level, method, message, context = {}) {
+    const timestamp = new Date().toISOString();
+    const logData = {
+      timestamp,
+      level,
+      method,
+      message,
+      ...context,
+    };
+
+    const logLine = `[${timestamp}] ${level.toUpperCase()} [CameraService.${method}] ${message}`;
+    if (Object.keys(context).length > 0) {
+      console.log(logLine, JSON.stringify(context, null, 2));
+    } else {
+      console.log(logLine);
+    }
+  }
+
+  static info(method, message, context = {}) {
+    this.log("info", method, message, context);
+  }
+
+  static error(method, message, context = {}) {
+    this.log("error", method, message, context);
+  }
+
+  static debug(method, message, context = {}) {
+    this.log("debug", method, message, context);
+  }
+
+  static warn(method, message, context = {}) {
+    this.log("warn", method, message, context);
+  }
+}
 
 class OperationContext {
   constructor(type, config, callbacks = {}, priority) {
@@ -43,12 +80,11 @@ class CameraService {
 
     this.operationQueue = new PriorityQueue({
       comparator: (a, b) => {
-        // ✅ CRITICAL FIX: Handle null/undefined values to prevent crashes
         if (!a && !b) return 0;
         if (!a) return 1;
         if (!b) return -1;
         if (typeof a.priority !== "number" || typeof b.priority !== "number") {
-          console.error("Invalid operation priority:", a, b);
+          Logger.error("priorityQueue", "Invalid operation priority", { a, b });
           return 0;
         }
         return b.priority - a.priority;
@@ -58,19 +94,36 @@ class CameraService {
     this.operationStates = new Map();
     this.continueNextOperation = this.continueNextOperation.bind(this);
 
+    Logger.info("constructor", "CameraService initialized", {
+      outputDir: this.outputDir,
+      mjpegStreamerPath: this.mjpegStreamerPath,
+      mjpegStreamerWwwPath: this.mjpegStreamerWwwPath,
+      platform: process.platform,
+    });
+
     this.ensureOutputDir();
   }
 
   async ensureOutputDir() {
     try {
       await fs.mkdir(this.outputDir, { recursive: true });
+      Logger.info("ensureOutputDir", "Output directory ensured", {
+        path: this.outputDir,
+      });
     } catch (error) {
-      console.error("Failed to create output directory:", error);
+      Logger.error("ensureOutputDir", "Failed to create output directory", {
+        error: error.message,
+      });
     }
   }
 
   isStreamActive() {
-    return this.streamProcess !== null;
+    const active = this.streamProcess !== null;
+    Logger.debug("isStreamActive", "Stream status checked", {
+      active,
+      pid: this.streamProcess?.pid,
+    });
+    return active;
   }
 
   getResolutionForQuality(quality) {
@@ -79,7 +132,12 @@ class CameraService {
       medium: "1280x720",
       high: "1920x1080",
     };
-    return resolutions[quality] || resolutions.medium;
+    const resolution = resolutions[quality] || resolutions.medium;
+    Logger.debug("getResolutionForQuality", "Resolution determined", {
+      quality,
+      resolution,
+    });
+    return resolution;
   }
 
   // ============================================================================
@@ -87,24 +145,61 @@ class CameraService {
   // ============================================================================
 
   async queueOperation(type, config, callbacks = {}, priority) {
-    // ✅ CRITICAL FIX: Validate operation before queuing
+    Logger.info("queueOperation", "Operation queuing requested", {
+      type,
+      priority,
+      currentOperation: this.currentOperation?.type || null,
+      currentOperationPriority: this.currentOperation?.priority || null,
+      queueLength: this.operationQueue.length,
+      streamActive: this.isStreamActive(),
+      isCapturing: this.isCapturing,
+    });
+
+    // Validate operation before queuing
     if (!type || typeof priority !== "number") {
-      console.error("Invalid operation parameters:", { type, priority });
+      Logger.error("queueOperation", "Invalid operation parameters", {
+        type,
+        priority,
+      });
       return;
     }
 
     const operation = new OperationContext(type, config, callbacks, priority);
 
     if (!this.currentOperation) {
+      Logger.info(
+        "queueOperation",
+        "No current operation, starting immediately",
+        { type }
+      );
       await this.startOperation(operation);
       return;
     }
 
     if (priority > this.currentOperation.priority) {
+      Logger.info(
+        "queueOperation",
+        "Higher priority operation, pausing current",
+        {
+          newType: type,
+          newPriority: priority,
+          currentType: this.currentOperation.type,
+          currentPriority: this.currentOperation.priority,
+        }
+      );
       await this.pauseCurrentOperation();
       this.operationQueue.queue(this.currentOperation);
       await this.startOperation(operation);
     } else {
+      Logger.info(
+        "queueOperation",
+        "Lower priority operation, adding to queue",
+        {
+          type,
+          priority,
+          queueLength: this.operationQueue.length + 1,
+        }
+      );
       this.operationQueue.queue(operation);
       callbacks.onNotification?.(
         "queued",
@@ -114,9 +209,16 @@ class CameraService {
   }
 
   async startOperation(operation) {
-    // ✅ CRITICAL FIX: Validate operation before starting
+    Logger.info("startOperation", "Starting operation", {
+      type: operation?.type,
+      priority: operation?.priority,
+      state: operation?.state,
+      timestamp: operation?.timestamp,
+    });
+
+    // Validate operation before starting
     if (!operation || !operation.type) {
-      console.error("Invalid operation passed to startOperation:", operation);
+      Logger.error("startOperation", "Invalid operation passed", { operation });
       return;
     }
 
@@ -126,21 +228,30 @@ class CameraService {
     try {
       switch (operation.type) {
         case "stream":
+          Logger.info("startOperation", "Starting stream operation");
           await this._doStartStream(operation);
           break;
         case "timelapse":
+          Logger.info("startOperation", "Starting timelapse operation");
           await this._doStartTimelapse(operation);
           break;
         case "capture":
+          Logger.info("startOperation", "Starting capture operation");
           await this._doCaptureImage(operation);
           break;
         default:
-          console.error("Unknown operation type:", operation.type);
+          Logger.error("startOperation", "Unknown operation type", {
+            type: operation.type,
+          });
           this.currentOperation = null;
           await this.continueNextOperation();
       }
     } catch (error) {
-      console.error("Error starting operation:", error);
+      Logger.error("startOperation", "Error starting operation", {
+        type: operation.type,
+        error: error.message,
+        stack: error.stack,
+      });
       this.currentOperation = null;
       await this.continueNextOperation();
     }
@@ -148,19 +259,33 @@ class CameraService {
 
   async pauseCurrentOperation() {
     const op = this.currentOperation;
-    if (!op) return;
+    if (!op) {
+      Logger.debug("pauseCurrentOperation", "No current operation to pause");
+      return;
+    }
 
+    Logger.info("pauseCurrentOperation", "Pausing current operation", {
+      type: op.type,
+      state: op.state,
+      timestamp: op.timestamp,
+    });
     op.state = "paused";
 
     try {
       switch (op.type) {
         case "stream":
           op.progress.wasActive = this.isStreamActive();
-          if (op.progress.wasActive) this._directStopStream();
+          if (op.progress.wasActive) {
+            Logger.info("pauseCurrentOperation", "Stopping active stream");
+            this._directStopStream();
+          }
           break;
         case "timelapse":
           op.progress.imageCount = this.imageCount;
           op.progress.sessionStartTime = this.sessionStartTime;
+          Logger.info("pauseCurrentOperation", "Stopping timelapse", {
+            imageCount: this.imageCount,
+          });
           this.stopTimelapse();
           break;
       }
@@ -168,16 +293,25 @@ class CameraService {
       this.operationStates.set(op.timestamp, op);
       op.callbacks.onNotification?.("paused", `${op.type} paused`);
     } catch (error) {
-      console.error("Error pausing operation:", error);
+      Logger.error("pauseCurrentOperation", "Error pausing operation", {
+        type: op.type,
+        error: error.message,
+      });
     }
 
     this.currentOperation = null;
   }
 
   async resumeOperation(op) {
-    // ✅ CRITICAL FIX: Validate operation before resuming
+    Logger.info("resumeOperation", "Resuming operation", {
+      type: op?.type,
+      state: op?.state,
+      timestamp: op?.timestamp,
+    });
+
+    // Validate operation before resuming
     if (!op || !op.type) {
-      console.error("Invalid operation passed to resumeOperation:", op);
+      Logger.error("resumeOperation", "Invalid operation passed", { op });
       return;
     }
 
@@ -187,34 +321,55 @@ class CameraService {
 
       switch (op.type) {
         case "stream":
-          if (op.progress.wasActive) await this._doStartStream(op);
+          if (op.progress.wasActive) {
+            Logger.info("resumeOperation", "Resuming stream operation");
+            await this._doStartStream(op);
+          }
           break;
         case "timelapse":
           this.imageCount = op.progress.imageCount || 0;
           this.sessionStartTime = op.progress.sessionStartTime || Date.now();
+          Logger.info("resumeOperation", "Resuming timelapse operation", {
+            imageCount: this.imageCount,
+          });
           await this._doStartTimelapse(op);
           break;
       }
 
       op.callbacks.onNotification?.("resumed", `${op.type} resumed`);
     } catch (error) {
-      console.error("Error resuming operation:", error);
+      Logger.error("resumeOperation", "Error resuming operation", {
+        type: op.type,
+        error: error.message,
+      });
       this.currentOperation = null;
       await this.continueNextOperation();
     }
   }
 
   async continueNextOperation() {
-    // ✅ CRITICAL FIX: Add proper safety checks for queue operations
+    Logger.debug("continueNextOperation", "Checking for next operation", {
+      hasCurrentOperation: !!this.currentOperation,
+      queueLength: this.operationQueue.length,
+    });
+
     try {
       if (!this.currentOperation && this.operationQueue.length > 0) {
         const nextOp = this.operationQueue.dequeue();
 
-        // ✅ CRITICAL FIX: Validate dequeued operation
+        Logger.info("continueNextOperation", "Dequeued next operation", {
+          type: nextOp?.type,
+          priority: nextOp?.priority,
+          timestamp: nextOp?.timestamp,
+        });
+
+        // Validate dequeued operation
         if (nextOp && nextOp.type) {
           await this.resumeOperation(nextOp);
         } else {
-          console.error("Invalid operation dequeued:", nextOp);
+          Logger.error("continueNextOperation", "Invalid operation dequeued", {
+            nextOp,
+          });
           // Try to continue with the next operation if available
           if (this.operationQueue.length > 0) {
             await this.continueNextOperation();
@@ -222,7 +377,9 @@ class CameraService {
         }
       }
     } catch (error) {
-      console.error("Error in continueNextOperation:", error);
+      Logger.error("continueNextOperation", "Error in queue processing", {
+        error: error.message,
+      });
       // Reset state to prevent deadlock
       this.currentOperation = null;
     }
@@ -233,6 +390,7 @@ class CameraService {
   // ============================================================================
 
   async captureImage(config, notifyCallback = null) {
+    Logger.info("captureImage", "Image capture requested", { config });
     await this.queueOperation(
       "capture",
       config,
@@ -247,6 +405,7 @@ class CameraService {
     onError,
     onStreamNotification = null
   ) {
+    Logger.info("startTimelapse", "Timelapse start requested", { config });
     await this.queueOperation(
       "timelapse",
       config,
@@ -256,6 +415,12 @@ class CameraService {
   }
 
   async startStream(config, onNotification = null) {
+    Logger.info("startStream", "Stream start requested", {
+      config,
+      isCurrentlyActive: this.isStreamActive(),
+      currentOperation: this.currentOperation?.type,
+      queueLength: this.operationQueue.length,
+    });
     await this.queueOperation(
       "stream",
       config,
@@ -265,9 +430,15 @@ class CameraService {
   }
 
   async stopStream() {
+    Logger.info("stopStream", "Stream stop requested", {
+      isCurrentlyActive: this.isStreamActive(),
+      currentOperation: this.currentOperation?.type,
+    });
+
     if (this.streamProcess) {
       this.streamProcess.kill("SIGKILL");
       this.streamProcess = null;
+      Logger.info("stopStream", "Stream process terminated");
     }
     return true;
   }
@@ -277,54 +448,137 @@ class CameraService {
   // ============================================================================
 
   async _directStartStream(config, onNotification = null) {
-    // ✅ CRITICAL FIX: Removed isCapturing check to allow stream during timelapse
-    if (this.streamProcess) return;
+    Logger.info("_directStartStream", "Direct stream start called", {
+      hasExistingProcess: !!this.streamProcess,
+      existingPid: this.streamProcess?.pid,
+      config,
+    });
+
+    // Only check for existing process, not isCapturing (this was the bug!)
+    if (this.streamProcess) {
+      Logger.warn(
+        "_directStartStream",
+        "Stream process already exists, skipping",
+        {
+          pid: this.streamProcess.pid,
+        }
+      );
+      return;
+    }
 
     try {
       this.currentStreamConfig = { ...config };
       const resolution = this.getResolutionForQuality(config.streamQuality);
 
-      this.streamProcess = spawn(this.mjpegStreamerPath, [
+      const command = [
         "-i",
         `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,
         "-o",
         `output_http.so -w ${this.mjpegStreamerWwwPath} -p 8080`,
-      ]);
+      ];
+
+      Logger.info("_directStartStream", "Spawning mjpg_streamer process", {
+        path: this.mjpegStreamerPath,
+        command,
+        resolution,
+        fps: config.streamFps,
+      });
+
+      this.streamProcess = spawn(this.mjpegStreamerPath, command);
+
+      Logger.info("_directStartStream", "Process spawned", {
+        pid: this.streamProcess.pid,
+        spawnfile: this.streamProcess.spawnfile,
+      });
 
       let ready = false;
       this.streamProcess.stderr.on("data", (data) => {
-        const output = data.toString();
+        const output = data.toString().trim();
+        Logger.debug("_directStartStream", "Stream stderr", { output });
+
         if (output.includes("o: commands.............: enabled") && !ready) {
           ready = true;
+          Logger.info("_directStartStream", "Stream ready signal detected");
           onNotification?.("stream-ready", "Live preview is ready");
         }
       });
 
+      this.streamProcess.stdout.on("data", (data) => {
+        const output = data.toString().trim();
+        Logger.debug("_directStartStream", "Stream stdout", { output });
+      });
+
       this.streamProcess.on("error", (err) => {
-        console.error("Stream process error:", err);
+        Logger.error("_directStartStream", "Stream process error", {
+          error: err.message,
+          code: err.code,
+          errno: err.errno,
+          syscall: err.syscall,
+          path: err.path,
+        });
         this.streamProcess = null;
         onNotification?.("stream-error", err.message);
       });
 
-      this.streamProcess.on("close", () => {
+      this.streamProcess.on("close", (code, signal) => {
+        Logger.info("_directStartStream", "Stream process closed", {
+          code,
+          signal,
+          pid: this.streamProcess?.pid,
+        });
         this.streamProcess = null;
         onNotification?.("stream-stopped", "Live preview stopped");
       });
+
+      this.streamProcess.on("exit", (code, signal) => {
+        Logger.info("_directStartStream", "Stream process exited", {
+          code,
+          signal,
+          pid: this.streamProcess?.pid,
+        });
+      });
+
+      // Set a timeout to check if the process starts successfully
+      setTimeout(() => {
+        if (this.streamProcess && !ready) {
+          Logger.warn(
+            "_directStartStream",
+            "Stream not ready after 5 seconds",
+            {
+              pid: this.streamProcess.pid,
+              exitCode: this.streamProcess.exitCode,
+              killed: this.streamProcess.killed,
+            }
+          );
+        }
+      }, 5000);
     } catch (error) {
-      console.error("Error starting stream:", error);
+      Logger.error("_directStartStream", "Error starting stream", {
+        error: error.message,
+        stack: error.stack,
+      });
       this.streamProcess = null;
       onNotification?.("stream-error", error.message);
     }
   }
 
   _directStopStream() {
+    Logger.info("_directStopStream", "Direct stream stop called", {
+      hasProcess: !!this.streamProcess,
+      pid: this.streamProcess?.pid,
+    });
+
     if (this.streamProcess) {
       try {
+        const pid = this.streamProcess.pid;
         this.streamProcess.kill("SIGKILL");
         this.streamProcess = null;
+        Logger.info("_directStopStream", "Stream process terminated", { pid });
         return true;
       } catch (error) {
-        console.error("Error stopping stream:", error);
+        Logger.error("_directStopStream", "Error stopping stream", {
+          error: error.message,
+        });
         this.streamProcess = null;
         return false;
       }
@@ -337,11 +591,13 @@ class CameraService {
   // ============================================================================
 
   async _doStartStream(op) {
+    Logger.info("_doStartStream", "Queue-managed stream operation starting");
     // Use direct method for queue-managed stream operations
     await this._directStartStream(op.config, op.callbacks.onNotification);
   }
 
   async _doCaptureImage(op) {
+    Logger.info("_doCaptureImage", "Image capture operation starting");
     const config = op.config;
     const resolution = this.getResolutionForQuality(config.imageQuality);
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -350,6 +606,13 @@ class CameraService {
 
     const wasStreamActive = this.isStreamActive();
     const streamConfig = wasStreamActive ? this.getCurrentStreamConfig() : null;
+
+    Logger.info("_doCaptureImage", "Capture parameters", {
+      resolution,
+      filename,
+      wasStreamActive,
+      hasStreamConfig: !!streamConfig,
+    });
 
     try {
       if (wasStreamActive) {
@@ -362,15 +625,22 @@ class CameraService {
       }
 
       const cmd = `fswebcam -r ${resolution} --no-banner "${filepath}"`;
+      Logger.info("_doCaptureImage", "Executing capture command", { cmd });
       await execAsync(cmd);
 
+      Logger.info("_doCaptureImage", "Image captured successfully", {
+        filename,
+      });
       op.callbacks.onNotification?.("image-captured", filename);
     } catch (error) {
-      console.error("Error capturing image:", error);
+      Logger.error("_doCaptureImage", "Error capturing image", {
+        error: error.message,
+      });
       op.callbacks.onNotification?.("capture-error", error.message);
       throw error;
     } finally {
       if (wasStreamActive && streamConfig) {
+        Logger.info("_doCaptureImage", "Restarting stream after capture");
         await this._directStartStream(
           streamConfig,
           op.callbacks.onNotification
@@ -382,7 +652,14 @@ class CameraService {
   }
 
   async _doStartTimelapse(op) {
-    if (this.isCapturing) return;
+    Logger.info("_doStartTimelapse", "Timelapse operation starting", {
+      isCurrentlyCapturing: this.isCapturing,
+    });
+
+    if (this.isCapturing) {
+      Logger.warn("_doStartTimelapse", "Already capturing, skipping");
+      return;
+    }
 
     try {
       this.isCapturing = true;
@@ -391,16 +668,30 @@ class CameraService {
 
       const config = op.config;
 
-      // ✅ CRITICAL FIX: Store stream state without interfering with queue
+      // Store stream state without interfering with queue
       const streamConfig = this.getCurrentStreamConfig();
       const wasStreamActive = this.isStreamActive();
 
+      Logger.info("_doStartTimelapse", "Timelapse configuration", {
+        captureInterval: config.captureInterval,
+        imageQuality: config.imageQuality,
+        wasStreamActive,
+        hasStreamConfig: !!streamConfig,
+      });
+
       const loop = async () => {
-        if (!this.isCapturing) return;
+        if (!this.isCapturing) {
+          Logger.info(
+            "_doStartTimelapse",
+            "Timelapse loop stopping - no longer capturing"
+          );
+          return;
+        }
 
         try {
           // Pause stream before capture
           if (wasStreamActive && streamConfig) {
+            Logger.debug("_doStartTimelapse", "Pausing stream for capture");
             this._directStopStream();
             await new Promise((res) => setTimeout(res, 500));
           }
@@ -411,9 +702,18 @@ class CameraService {
           const filepath = path.join(this.outputDir, filename);
 
           const cmd = `fswebcam -r ${resolution} --no-banner "${filepath}"`;
+          Logger.debug("_doStartTimelapse", "Capturing timelapse image", {
+            cmd,
+            imageCount: this.imageCount + 1,
+          });
           await execAsync(cmd);
 
           this.imageCount++;
+          Logger.info("_doStartTimelapse", "Timelapse image captured", {
+            imageCount: this.imageCount,
+            filename,
+          });
+
           op.callbacks.onNotification?.("image-captured", filename);
           op.callbacks.onImageCaptured?.({
             imageCount: this.imageCount,
@@ -422,12 +722,15 @@ class CameraService {
             filepath,
           });
         } catch (err) {
-          console.error("Error in timelapse capture:", err);
+          Logger.error("_doStartTimelapse", "Error in timelapse capture", {
+            error: err.message,
+          });
           op.callbacks.onError?.(err);
         }
 
-        // ✅ FIXED: Resume stream after capture (isCapturing check removed from _directStartStream)
+        // Resume stream after capture
         if (this.isCapturing && wasStreamActive && streamConfig) {
+          Logger.debug("_doStartTimelapse", "Resuming stream after capture");
           await this._directStartStream(
             streamConfig,
             op.callbacks.onNotification
@@ -435,6 +738,9 @@ class CameraService {
         }
 
         if (this.isCapturing) {
+          Logger.debug("_doStartTimelapse", "Scheduling next capture", {
+            intervalSeconds: config.captureInterval,
+          });
           this.captureInterval = setTimeout(
             loop,
             config.captureInterval * 1000
@@ -444,7 +750,9 @@ class CameraService {
 
       loop();
     } catch (error) {
-      console.error("Error starting timelapse:", error);
+      Logger.error("_doStartTimelapse", "Error starting timelapse", {
+        error: error.message,
+      });
       this.isCapturing = false;
       this.currentOperation = null;
       await this.continueNextOperation();
@@ -456,31 +764,45 @@ class CameraService {
   // ============================================================================
 
   stopTimelapse() {
-    if (!this.isCapturing) return false;
+    Logger.info("stopTimelapse", "Timelapse stop requested", {
+      isCurrentlyCapturing: this.isCapturing,
+      hasInterval: !!this.captureInterval,
+      currentOperation: this.currentOperation?.type,
+    });
+
+    if (!this.isCapturing) {
+      Logger.warn("stopTimelapse", "Not currently capturing");
+      return false;
+    }
 
     try {
       this.isCapturing = false;
       if (this.captureInterval) {
         clearTimeout(this.captureInterval);
         this.captureInterval = null;
+        Logger.info("stopTimelapse", "Capture interval cleared");
       }
 
-      // ✅ CRITICAL FIX: Mark operation as complete and process queue safely
+      // Mark operation as complete and process queue safely
       this.currentOperation = null;
 
       // Use setTimeout to prevent stack overflow in recursive calls
       setTimeout(() => {
         this.continueNextOperation().catch((error) => {
-          console.error(
-            "Error continuing operations after timelapse stop:",
-            error
+          Logger.error(
+            "stopTimelapse",
+            "Error continuing operations after stop",
+            { error: error.message }
           );
         });
       }, 100);
 
+      Logger.info("stopTimelapse", "Timelapse stopped successfully");
       return true;
     } catch (error) {
-      console.error("Error stopping timelapse:", error);
+      Logger.error("stopTimelapse", "Error stopping timelapse", {
+        error: error.message,
+      });
       this.isCapturing = false;
       this.currentOperation = null;
       return false;
@@ -501,14 +823,18 @@ class CameraService {
   }
 
   getStatus() {
-    return {
+    const status = {
       isCapturing: this.isCapturing,
       imageCount: this.imageCount,
       sessionTime: this.getSessionTime(),
       isStreamActive: this.isStreamActive(),
       currentOperation: this.currentOperation?.type || null,
       queueLength: this.operationQueue.length || 0,
+      streamPid: this.streamProcess?.pid || null,
     };
+
+    Logger.debug("getStatus", "Status requested", status);
+    return status;
   }
 
   async getImageList() {
@@ -528,9 +854,15 @@ class CameraService {
           };
         })
       );
-      return list.sort((a, b) => b.created - a.created);
+      const sortedList = list.sort((a, b) => b.created - a.created);
+      Logger.debug("getImageList", "Image list retrieved", {
+        count: sortedList.length,
+      });
+      return sortedList;
     } catch (err) {
-      console.error("Failed to list images:", err);
+      Logger.error("getImageList", "Failed to list images", {
+        error: err.message,
+      });
       return [];
     }
   }
@@ -545,9 +877,14 @@ class CameraService {
         targets.map((file) => fs.unlink(path.join(this.outputDir, file)))
       );
       this.imageCount = 0;
+      Logger.info("clearImages", "Images cleared successfully", {
+        count: targets.length,
+      });
       return targets.length;
     } catch (err) {
-      console.error("Failed to clear images:", err);
+      Logger.error("clearImages", "Failed to clear images", {
+        error: err.message,
+      });
       throw err;
     }
   }
@@ -557,10 +894,15 @@ class CameraService {
   }
 
   setStreamProcess(proc) {
+    Logger.info("setStreamProcess", "Stream process set externally", {
+      hasProcess: !!proc,
+      pid: proc?.pid,
+    });
     this.streamProcess = proc;
   }
 
   cleanup() {
+    Logger.info("cleanup", "Cleanup requested");
     try {
       this.stopTimelapse();
       this.stopStream();
@@ -574,8 +916,9 @@ class CameraService {
       // Reset state
       this.currentOperation = null;
       this.isCapturing = false;
+      Logger.info("cleanup", "Cleanup completed successfully");
     } catch (error) {
-      console.error("Error during cleanup:", error);
+      Logger.error("cleanup", "Error during cleanup", { error: error.message });
     }
   }
 }

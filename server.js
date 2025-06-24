@@ -1,526 +1,449 @@
-// server.js
-const express = require("express");
-const http = require("http");
-const socketIo = require("socket.io");
-const path = require("path");
-const { spawn } = require("child_process");
-const os = require("os"); // Import the 'os' module
-const CameraService = require("./services/cameraService");
-const ConfigService = require("./services/configService");
+// Enhanced server.js logging example - Add this logging enhancement to your server.js
 
-const app = express();
-const server = http.createServer(app);
-const io = socketIo(server);
+// Add this enhanced logging class at the top of your server.js
+class ServerLogger {
+  static log(level, userId, method, message, context = {}) {
+    const timestamp = new Date().toISOString();
+    const userInfo = userId ? `[User:${userId.slice(-4)}]` : "[System]";
+    const logData = {
+      timestamp,
+      userId,
+      level,
+      method,
+      message,
+      ...context,
+    };
 
-// IMPORTANT: Set the absolute path to your mjpg_streamer executable
-// You might find it in /usr/local/bin/mjpg_streamer or within the directory you compiled it.
-// Replace '/path/to/your/mjpg_streamer' with the actual path.
-const MJPEG_STREAMER_PATH = "/usr/local/bin/mjpg_streamer"; // Common default install location
-// If you compiled it in your home directory, it might be something like:
-// const MJPEG_STREAMER_PATH = '/home/pi/mjpg-streamer/mjpg-streamer-experimental/mjpg_streamer';
-
-// IMPORTANT: Set the absolute path to mjpeg-streamer's www directory
-// This is crucial for the output_http.so plugin to serve its web interface (and the stream endpoint)
-// It's often ./www relative to the mjpg_streamer executable, or /usr/local/share/mjpg-streamer/www/
-const MJPEG_STREAMER_WWW_PATH = "/usr/local/share/mjpg-streamer/www/"; // Common default install location
-// If you compiled it in your home directory, it might be something like:
-// const MJPEG_STREAMER_WWW_PATH = '/home/pi/mjpg-streamer/mjpg-streamer-experimental/www/';
-
-// Function to get the server's local IP address
-function getServerIpAddress() {
-  const interfaces = os.networkInterfaces();
-  for (const name in interfaces) {
-    for (const iface of interfaces[name]) {
-      // Filter out internal (loopback) and non-IPv4 addresses
-      if (iface.family === "IPv4" && !iface.internal) {
-        return iface.address;
-      }
+    const logLine = `[${timestamp}] ${level.toUpperCase()} ${userInfo} [${method}] ${message}`;
+    if (Object.keys(context).length > 0) {
+      console.log(logLine, JSON.stringify(context, null, 2));
+    } else {
+      console.log(logLine);
     }
   }
-  return "localhost"; // Fallback if no external IP is found
+
+  static info(userId, method, message, context = {}) {
+    this.log("info", userId, method, message, context);
+  }
+
+  static error(userId, method, message, context = {}) {
+    this.log("error", userId, method, message, context);
+  }
+
+  static debug(userId, method, message, context = {}) {
+    this.log("debug", userId, method, message, context);
+  }
+
+  static warn(userId, method, message, context = {}) {
+    this.log("warn", userId, method, message, context);
+  }
 }
 
-// Helper function to format time (seconds to HH:MM:SS)
-function formatTime(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  return [h, m, s].map((v) => (v < 10 ? "0" + v : v)).join(":");
-}
+// Enhanced socket event handler with user tracking
+// Replace your existing socket connection handler with this enhanced version:
 
-// Initialize configuration service
-const configService = new ConfigService();
-let fullConfig;
-let currentConfig; // Legacy config format for web interface compatibility
+io.on("connection", (socket) => {
+  const userId = socket.id;
+  const userShortId = userId.slice(-4);
 
-// Initialize the application asynchronously
-async function initializeApp() {
-  try {
-    // Load configuration from environment variables
-    fullConfig = await configService.loadConfig();
-    currentConfig = configService.getLegacyConfig(fullConfig);
+  ServerLogger.info(userId, "connection", "User connected", {
+    userAgent: socket.handshake.headers["user-agent"],
+    ip: socket.handshake.address,
+  });
 
-    const PORT = fullConfig.port;
-    const SERVER_IP_ADDRESS = getServerIpAddress();
-    console.log(`Node.js server running on: ${SERVER_IP_ADDRESS}:${PORT}`);
+  // Send current configuration to the newly connected client
+  socket.emit("configUpdate", currentConfig);
 
-    // Serve static files from the current directory
-    app.use(express.static(path.join(__dirname)));
+  const fullExtendedConfig = configService.getExtendedConfig();
+  socket.emit("extendedConfigUpdate", fullExtendedConfig);
+  ServerLogger.info(userId, "connection", "Sent configuration to client");
 
-    // Initialize camera service with full config
-    const cameraService = new CameraService();
-    let captureStatus = "Stopped";
+  // Handle disconnection
+  socket.on("disconnect", () => {
+    ServerLogger.info(userId, "disconnect", "User disconnected");
+  });
 
-    // --- Socket.IO Connection Handling ---
-    io.on("connection", (socket) => {
-      console.log("A user connected:", socket.id);
+  // Enhanced toggle stream handler with detailed logging
+  socket.on("toggleStream", async () => {
+    ServerLogger.info(userId, "toggleStream", "Stream toggle requested", {
+      currentlyActive: cameraService.isStreamActive(),
+      currentOperation: cameraService.getStatus().currentOperation,
+      queueLength: cameraService.getStatus().queueLength,
+    });
 
-      // Send initial status and config to the newly connected client
-      const status = cameraService.getStatus();
-      socket.emit("statusUpdate", {
-        captureStatus: status.isCapturing ? "Running" : "Stopped",
-        imageCount: status.imageCount,
-        sessionTime: status.sessionTime,
-        nextCapture: status.isCapturing
-          ? `in ${currentConfig.captureInterval}s`
-          : "--",
-      });
-      socket.emit("configUpdate", currentConfig);
+    try {
+      if (!cameraService.isStreamActive()) {
+        ServerLogger.info(userId, "toggleStream", "Starting stream");
 
-      // Send extended configuration to new clients
-      try {
-        const fullExtendedConfig = configService.getExtendedConfig(fullConfig);
-        socket.emit("extendedConfigUpdate", fullExtendedConfig);
-      } catch (error) {
-        console.error("Error sending initial extended config:", error);
-      }
-
-      // Also send the current stream status and URL if streaming is active
-      if (cameraService.isStreamActive()) {
-        socket.emit("streamStatusUpdate", "Streaming");
-        // Now using the server's actual IP address
-        socket.emit(
-          "liveStreamUrl",
-          `http://${SERVER_IP_ADDRESS}:8080/?action=stream`
-        );
-      } else {
-        socket.emit("streamStatusUpdate", "Stopped");
-        socket.emit("liveStreamUrl", ""); // Clear URL if not streaming
-      }
-
-      // Handle config saving with persistence
-      socket.on("saveConfig", async (config) => {
-        try {
-          console.log("Saving config:", config);
-
-          // Update configuration persistently using ConfigService
-          await configService.updateConfig(config);
-
-          // Reload the full configuration
-          fullConfig = await configService.loadConfig();
-          currentConfig = configService.getLegacyConfig(fullConfig);
-
-          // Update all clients with new config
-          io.emit("configUpdate", currentConfig);
-          socket.emit("notification", {
-            message: "Configuration saved and persisted!",
-            type: "success",
-          });
-        } catch (error) {
-          console.error("Error saving configuration:", error);
-          socket.emit("notification", {
-            message: `Failed to save configuration: ${error.message}`,
-            type: "error",
-          });
-        }
-      });
-
-      // Handle extended config saving with full validation
-      socket.on("saveExtendedConfig", async (extendedConfig) => {
-        try {
-          console.log("Saving extended config:", extendedConfig);
-
-          // Update configuration persistently using ConfigService
-          await configService.updateExtendedConfig(extendedConfig);
-
-          // Reload the full configuration
-          fullConfig = await configService.loadConfig();
-          currentConfig = configService.getLegacyConfig(fullConfig);
-          const fullExtendedConfig =
-            configService.getExtendedConfig(fullConfig);
-
-          // Update all clients with new config
-          io.emit("configUpdate", currentConfig);
-          io.emit("extendedConfigUpdate", fullExtendedConfig);
-          socket.emit("notification", {
-            message: "Extended configuration saved and persisted!",
-            type: "success",
-          });
-          socket.emit("configSaved"); // Signal successful save
-        } catch (error) {
-          console.error("Error saving extended configuration:", error);
-          socket.emit("notification", {
-            message: `Failed to save extended configuration: ${error.message}`,
-            type: "error",
-          });
-        }
-      });
-
-      // Handle request for extended configuration
-      socket.on("requestExtendedConfig", () => {
-        try {
-          const fullExtendedConfig =
-            configService.getExtendedConfig(fullConfig);
-          socket.emit("extendedConfigUpdate", fullExtendedConfig);
-          console.log("Sent extended configuration to client");
-        } catch (error) {
-          console.error("Error sending extended configuration:", error);
-          socket.emit("notification", {
-            message: "Failed to load extended configuration",
-            type: "error",
-          });
-        }
-      });
-
-      // Handle reset to defaults
-      socket.on("resetConfigToDefaults", async () => {
-        try {
-          console.log("Resetting configuration to defaults...");
-
-          // Generate default .env content
-          const defaultEnvContent = configService.generateDefaultEnvContent();
-          await configService.writeEnvFile(
-            configService.parseEnvContent(defaultEnvContent)
-          );
-
-          // Reload configuration
-          fullConfig = await configService.loadConfig();
-          currentConfig = configService.getLegacyConfig(fullConfig);
-          const fullExtendedConfig =
-            configService.getExtendedConfig(fullConfig);
-
-          // Update all clients
-          io.emit("configUpdate", currentConfig);
-          io.emit("extendedConfigUpdate", fullExtendedConfig);
-          socket.emit("notification", {
-            message: "Configuration reset to defaults!",
-            type: "success",
-          });
-        } catch (error) {
-          console.error("Error resetting configuration:", error);
-          socket.emit("notification", {
-            message: `Failed to reset configuration: ${error.message}`,
-            type: "error",
-          });
-        }
-      });
-
-      // Handle start capture command
-      socket.on("startCapture", async () => {
-        const status = cameraService.getStatus();
-        if (!status.isCapturing) {
-          try {
-            captureStatus = "Running";
-
-            // No need to manually set stream process - CameraService manages it internally
-
-            await cameraService.startTimelapse(
-              currentConfig,
-              // onImageCaptured callback
-              (captureData) => {
-                io.emit("statusUpdate", {
-                  captureStatus: "Running",
-                  imageCount: captureData.imageCount,
-                  sessionTime: captureData.sessionTime,
-                  nextCapture: `in ${currentConfig.captureInterval}s`,
-                });
-              },
-              // onError callback
-              (error) => {
-                console.error("Timelapse capture error:", error);
-                captureStatus = "Stopped";
-                io.emit("statusUpdate", {
-                  captureStatus: "Stopped",
-                  imageCount: cameraService.getStatus().imageCount,
-                  sessionTime: cameraService.getStatus().sessionTime,
-                  nextCapture: "--",
-                });
-                socket.emit("notification", {
-                  message: `Capture failed: ${error.message}`,
-                  type: "error",
-                });
-              },
-              // onStreamNotification callback
-              (type, message) => {
-                if (type === "stream-paused") {
-                  io.emit("streamStatusUpdate", "Paused for capture");
-                  io.emit("notification", { message, type: "info" });
-                } else if (type === "stream-resumed") {
-                  io.emit("streamStatusUpdate", "Streaming");
-                  io.emit("notification", { message, type: "success" });
-                } else if (type === "stream-ready") {
-                  // New handler for when stream is actually ready
-                  const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
-                  io.emit("streamStatusUpdate", "Streaming");
-                  io.emit("liveStreamUrl", streamUrl);
-                  io.emit("notification", { message, type: "success" });
-                } else if (type === "stream-error") {
-                  io.emit("streamStatusUpdate", "Stopped");
-                  io.emit("liveStreamUrl", "");
-                  io.emit("notification", { message, type: "error" });
-                }
-              }
-            );
-
-            const newStatus = cameraService.getStatus();
-            io.emit("statusUpdate", {
-              captureStatus: "Running",
-              imageCount: newStatus.imageCount,
-              sessionTime: newStatus.sessionTime,
-              nextCapture: `in ${currentConfig.captureInterval}s`,
-            });
-            socket.emit("notification", {
-              message: "Time-lapse capture started with fswebcam!",
-              type: "success",
-            });
-          } catch (error) {
-            console.error("Failed to start timelapse:", error);
-            captureStatus = "Stopped";
-            socket.emit("notification", {
-              message: `Failed to start capture: ${error.message}`,
-              type: "error",
-            });
-          }
-        } else {
-          socket.emit("notification", {
-            message: "Capture is already running.",
-            type: "info",
-          });
-        }
-      });
-
-      // Handle stop capture command
-      socket.on("stopCapture", () => {
-        const status = cameraService.getStatus();
-        if (status.isCapturing) {
-          console.log("Stopping timelapse capture...");
-          const stopped = cameraService.stopTimelapse();
-
-          if (stopped) {
-            captureStatus = "Stopped";
-            const finalStatus = cameraService.getStatus();
-
-            io.emit("statusUpdate", {
-              captureStatus: "Stopped",
-              imageCount: finalStatus.imageCount,
-              sessionTime: finalStatus.sessionTime,
-              nextCapture: "--",
-            });
-            socket.emit("notification", {
-              message: "Time-lapse capture stopped.",
-              type: "success",
-            });
-          }
-        } else {
-          socket.emit("notification", {
-            message: "Capture is not running.",
-            type: "info",
-          });
-        }
-      });
-
-      // Handle toggle stream command
-      let streamReadyEmitted = false; // Flag to prevent multiple URL emissions
-      socket.on("toggleStream", async () => {
-        try {
-          if (!cameraService.isStreamActive()) {
-            // Start stream using centralized method
-            await cameraService.startStream(currentConfig, (event, message) => {
-              if (event === "stream-ready") {
-                const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
-                io.emit("streamStatusUpdate", "Streaming");
-                io.emit("liveStreamUrl", streamUrl);
-                socket.emit("notification", {
-                  message: "Live preview started!",
-                  type: "success",
-                });
-                streamReadyEmitted = true;
-              } else if (event === "stream-error") {
-                io.emit("streamStatusUpdate", "Stopped");
-                io.emit("liveStreamUrl", "");
-                socket.emit("notification", {
-                  message: `Stream error: ${message}`,
-                  type: "error",
-                });
-              } else if (event === "stream-stopped") {
-                io.emit("streamStatusUpdate", "Stopped");
-                io.emit("liveStreamUrl", "");
-                streamReadyEmitted = false;
-              }
-            });
-          } else {
-            // Stop stream using centralized method
-            await cameraService.stopStream();
-            io.emit("streamStatusUpdate", "Stopped");
-            io.emit("liveStreamUrl", "");
-            socket.emit("notification", {
-              message: "Live preview stopped.",
-              type: "success",
-            });
-            streamReadyEmitted = false;
-          }
-        } catch (error) {
-          console.error("Stream toggle error:", error);
-          socket.emit("notification", {
-            message: error.message,
-            type: "error",
-          });
-        }
-      });
-
-      // Handle video generation
-      socket.on("generateVideo", async () => {
-        try {
-          console.log("Generating video with ffmpeg...");
-          io.emit("videoGenerationStatus", {
-            status: "in-progress",
-            message: "Starting video generation...",
-          });
-
-          const result = await cameraService.generateVideo(
-            currentConfig,
-            (progress) => {
-              io.emit("videoGenerationStatus", {
-                status: "in-progress",
-                message: `Generating: ${progress}%`,
-                progress: progress,
-              });
+        // Start stream using centralized method
+        await cameraService.startStream(currentConfig, (event, message) => {
+          ServerLogger.debug(
+            userId,
+            "streamCallback",
+            "Stream event received",
+            {
+              event,
+              message,
             }
           );
 
-          io.emit("videoGenerationStatus", {
-            status: "complete",
-            message: `Video generation complete! File: ${result.filename}`,
-          });
-          socket.emit("notification", {
-            message: `Time-lapse video generated: ${result.filename}`,
-            type: "success",
-          });
-        } catch (error) {
-          console.error("Video generation failed:", error);
-          io.emit("videoGenerationStatus", {
-            status: "error",
-            message: `Video generation failed: ${error.message}`,
-          });
-          socket.emit("notification", {
-            message: `Video generation failed: ${error.message}`,
-            type: "error",
-          });
-        }
+          if (event === "stream-ready") {
+            const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
+            io.emit("streamStatusUpdate", "Streaming");
+            io.emit("liveStreamUrl", streamUrl);
+            socket.emit("notification", {
+              message: "Live preview started!",
+              type: "success",
+            });
+            ServerLogger.info(
+              userId,
+              "streamCallback",
+              "Stream ready notification sent",
+              {
+                streamUrl,
+              }
+            );
+          } else if (event === "stream-error") {
+            io.emit("streamStatusUpdate", "Stopped");
+            io.emit("liveStreamUrl", "");
+            socket.emit("notification", {
+              message: `Stream error: ${message}`,
+              type: "error",
+            });
+            ServerLogger.error(
+              userId,
+              "streamCallback",
+              "Stream error occurred",
+              {
+                error: message,
+              }
+            );
+          } else if (event === "stream-stopped") {
+            io.emit("streamStatusUpdate", "Stopped");
+            io.emit("liveStreamUrl", "");
+            ServerLogger.info(
+              userId,
+              "streamCallback",
+              "Stream stopped notification sent"
+            );
+          }
+        });
+      } else {
+        ServerLogger.info(userId, "toggleStream", "Stopping stream");
+
+        // Stop stream using centralized method
+        await cameraService.stopStream();
+        io.emit("streamStatusUpdate", "Stopped");
+        io.emit("liveStreamUrl", "");
+        socket.emit("notification", {
+          message: "Live preview stopped.",
+          type: "success",
+        });
+        ServerLogger.info(userId, "toggleStream", "Stream stop completed");
+      }
+    } catch (error) {
+      ServerLogger.error(userId, "toggleStream", "Stream toggle failed", {
+        error: error.message,
+        stack: error.stack,
       });
-
-      // Handle image refresh
-      socket.on("refreshImages", async () => {
-        try {
-          console.log("Refreshing images...");
-          const imageList = await cameraService.getImageList();
-          io.emit("imageListUpdate", imageList); // Send to all clients
-          socket.emit("notification", {
-            message: `Found ${imageList.length} images.`,
-            type: "info",
-          });
-        } catch (error) {
-          console.error("Failed to refresh images:", error);
-          socket.emit("notification", {
-            message: `Failed to refresh images: ${error.message}`,
-            type: "error",
-          });
-        }
+      socket.emit("notification", {
+        message: error.message,
+        type: "error",
       });
+    }
+  });
 
-      // Handle clear images
-      socket.on("clearImages", async () => {
-        try {
-          console.log("Clearing images...");
-          const clearedCount = await cameraService.clearImages();
-
-          // Update status with current camera service state
-          const status = cameraService.getStatus();
-          io.emit("statusUpdate", {
-            captureStatus: status.isCapturing ? "Running" : "Stopped",
-            imageCount: status.imageCount,
-            sessionTime: status.sessionTime,
-            nextCapture: status.isCapturing
-              ? `in ${currentConfig.captureInterval}s`
-              : "--",
-          });
-
-          socket.emit("notification", {
-            message: `Cleared ${clearedCount} images!`,
-            type: "success",
-          });
-          io.emit("imagesCleared");
-        } catch (error) {
-          console.error("Failed to clear images:", error);
-          socket.emit("notification", {
-            message: `Failed to clear images: ${error.message}`,
-            type: "error",
-          });
-        }
-      });
-
-      // Handle video refresh
-      socket.on("refreshVideos", async () => {
-        try {
-          console.log("Refreshing videos...");
-          const videoList = await cameraService.getVideoList();
-          socket.emit("videoListUpdate", videoList);
-          socket.emit("notification", {
-            message: `Found ${videoList.length} videos.`,
-            type: "info",
-          });
-        } catch (error) {
-          console.error("Failed to refresh videos:", error);
-          socket.emit("notification", {
-            message: `Failed to refresh videos: ${error.message}`,
-            type: "error",
-          });
-        }
-      });
-
-      socket.on("disconnect", () => {
-        console.log("User disconnected:", socket.id);
-        // No socket-specific cleanup needed with camera service
-      });
+  // Enhanced start capture handler
+  socket.on("startCapture", async () => {
+    const status = cameraService.getStatus();
+    ServerLogger.info(userId, "startCapture", "Timelapse start requested", {
+      currentStatus: status,
+      config: currentConfig,
     });
 
-    // Start the server
-    server.listen(fullConfig.port, () => {
-      console.log(`Server listening on port ${fullConfig.port}`);
-      console.log(`Open your browser to http://localhost:${fullConfig.port}`);
+    if (!status.isCapturing) {
+      try {
+        captureStatus = "Running";
+
+        await cameraService.startTimelapse(
+          currentConfig,
+          // onImageCaptured callback
+          (captureData) => {
+            ServerLogger.debug(userId, "timelapseCallback", "Image captured", {
+              imageCount: captureData.imageCount,
+              sessionTime: captureData.sessionTime,
+              filename: captureData.filename,
+            });
+
+            io.emit("statusUpdate", {
+              captureStatus: "Running",
+              imageCount: captureData.imageCount,
+              sessionTime: captureData.sessionTime,
+              nextCapture: `in ${currentConfig.captureInterval}s`,
+            });
+          },
+          // onError callback
+          (error) => {
+            ServerLogger.error(
+              userId,
+              "timelapseCallback",
+              "Timelapse capture error",
+              {
+                error: error.message,
+              }
+            );
+            captureStatus = "Stopped";
+            io.emit("statusUpdate", {
+              captureStatus: "Stopped",
+              imageCount: cameraService.getStatus().imageCount,
+              sessionTime: cameraService.getStatus().sessionTime,
+              nextCapture: "--",
+            });
+            socket.emit("notification", {
+              message: `Capture failed: ${error.message}`,
+              type: "error",
+            });
+          },
+          // onStreamNotification callback
+          (type, message) => {
+            ServerLogger.debug(
+              userId,
+              "streamNotificationCallback",
+              "Stream notification",
+              {
+                type,
+                message,
+              }
+            );
+
+            if (type === "stream-paused") {
+              io.emit("streamStatusUpdate", "Paused for capture");
+              io.emit("notification", { message, type: "info" });
+            } else if (type === "stream-resumed") {
+              io.emit("streamStatusUpdate", "Streaming");
+              io.emit("notification", { message, type: "success" });
+            } else if (type === "stream-ready") {
+              const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
+              io.emit("streamStatusUpdate", "Streaming");
+              io.emit("liveStreamUrl", streamUrl);
+              io.emit("notification", { message, type: "success" });
+            } else if (type === "stream-error") {
+              io.emit("streamStatusUpdate", "Stopped");
+              io.emit("liveStreamUrl", "");
+              io.emit("notification", { message, type: "error" });
+            }
+          }
+        );
+
+        const newStatus = cameraService.getStatus();
+        io.emit("statusUpdate", {
+          captureStatus: "Running",
+          imageCount: newStatus.imageCount,
+          sessionTime: newStatus.sessionTime,
+          nextCapture: `in ${currentConfig.captureInterval}s`,
+        });
+
+        socket.emit("notification", {
+          message: "Time-lapse capture started with fswebcam!",
+          type: "success",
+        });
+
+        ServerLogger.info(
+          userId,
+          "startCapture",
+          "Timelapse started successfully",
+          {
+            newStatus,
+          }
+        );
+      } catch (error) {
+        ServerLogger.error(
+          userId,
+          "startCapture",
+          "Failed to start timelapse",
+          {
+            error: error.message,
+            stack: error.stack,
+          }
+        );
+        captureStatus = "Stopped";
+        socket.emit("notification", {
+          message: `Failed to start capture: ${error.message}`,
+          type: "error",
+        });
+      }
+    } else {
+      ServerLogger.warn(userId, "startCapture", "Capture already running");
+      socket.emit("notification", {
+        message: "Capture is already running.",
+        type: "info",
+      });
+    }
+  });
+
+  // Enhanced stop capture handler
+  socket.on("stopCapture", () => {
+    ServerLogger.info(userId, "stopCapture", "Timelapse stop requested", {
+      currentStatus: cameraService.getStatus(),
     });
 
-    // --- System Info Simulation ---
-    let systemInfoInterval = setInterval(() => {
-      const memoryUsage = `${(
-        process.memoryUsage().heapUsed /
-        1024 /
-        1024
-      ).toFixed(2)} MB`;
-      const uptimeSeconds = process.uptime();
-      const systemUptime = formatTime(uptimeSeconds);
-
-      io.emit("systemInfoUpdate", {
-        memoryUsage: memoryUsage,
-        systemUptime: systemUptime,
-        streamStatus: cameraService.isStreamActive() ? "Streaming" : "Stopped",
+    const stopped = cameraService.stopTimelapse();
+    if (stopped) {
+      captureStatus = "Stopped";
+      const status = cameraService.getStatus();
+      io.emit("statusUpdate", {
+        captureStatus: "Stopped",
+        imageCount: status.imageCount,
+        sessionTime: status.sessionTime,
+        nextCapture: "--",
       });
-    }, 5000); // Update every 5 seconds
-  } catch (error) {
-    console.error("Failed to initialize application:", error);
-    process.exit(1);
-  }
-}
+      socket.emit("notification", {
+        message: "Time-lapse capture stopped.",
+        type: "success",
+      });
+      ServerLogger.info(
+        userId,
+        "stopCapture",
+        "Timelapse stopped successfully",
+        {
+          finalStatus: status,
+        }
+      );
+    } else {
+      ServerLogger.warn(userId, "stopCapture", "No timelapse was running");
+      socket.emit("notification", {
+        message: "No capture was running.",
+        type: "info",
+      });
+    }
+  });
 
-// Start the application
-initializeApp();
+  // Enhanced configuration update handler
+  socket.on("updateConfig", async (newConfig) => {
+    ServerLogger.info(
+      userId,
+      "updateConfig",
+      "Configuration update requested",
+      {
+        newConfig,
+        currentConfig,
+      }
+    );
+
+    try {
+      // Merge with current config to ensure all required fields are present
+      currentConfig = { ...currentConfig, ...newConfig };
+
+      // Save using ConfigService
+      await configService.saveConfig(currentConfig);
+
+      // Update all clients
+      io.emit("configUpdate", currentConfig);
+      socket.emit("notification", {
+        message: "Configuration updated successfully!",
+        type: "success",
+      });
+
+      ServerLogger.info(
+        userId,
+        "updateConfig",
+        "Configuration updated successfully",
+        {
+          updatedConfig: currentConfig,
+        }
+      );
+    } catch (error) {
+      ServerLogger.error(
+        userId,
+        "updateConfig",
+        "Failed to update configuration",
+        {
+          error: error.message,
+          newConfig,
+        }
+      );
+      socket.emit("notification", {
+        message: `Failed to update configuration: ${error.message}`,
+        type: "error",
+      });
+    }
+  });
+
+  // Add logging to other handlers as well...
+  socket.on("requestStatus", () => {
+    ServerLogger.debug(userId, "requestStatus", "Status requested");
+    const status = cameraService.getStatus();
+    socket.emit("statusUpdate", {
+      captureStatus: status.isCapturing ? "Running" : "Stopped",
+      imageCount: status.imageCount,
+      sessionTime: status.sessionTime,
+      nextCapture: status.isCapturing
+        ? `in ${currentConfig.captureInterval}s`
+        : "--",
+    });
+    ServerLogger.debug(userId, "requestStatus", "Status sent", { status });
+  });
+
+  socket.on("requestImages", async () => {
+    ServerLogger.debug(userId, "requestImages", "Image list requested");
+    try {
+      const images = await cameraService.getImageList();
+      socket.emit("imageList", images);
+      ServerLogger.debug(userId, "requestImages", "Image list sent", {
+        count: images.length,
+      });
+    } catch (error) {
+      ServerLogger.error(userId, "requestImages", "Failed to get image list", {
+        error: error.message,
+      });
+      socket.emit("notification", {
+        message: `Failed to get images: ${error.message}`,
+        type: "error",
+      });
+    }
+  });
+
+  socket.on("clearImages", async () => {
+    ServerLogger.info(userId, "clearImages", "Image clear requested");
+    try {
+      const deletedCount = await cameraService.clearImages();
+      socket.emit("notification", {
+        message: `Deleted ${deletedCount} image(s).`,
+        type: "success",
+      });
+      // Send updated image list
+      const images = await cameraService.getImageList();
+      io.emit("imageList", images);
+      ServerLogger.info(userId, "clearImages", "Images cleared successfully", {
+        deletedCount,
+      });
+    } catch (error) {
+      ServerLogger.error(userId, "clearImages", "Failed to clear images", {
+        error: error.message,
+      });
+      socket.emit("notification", {
+        message: `Failed to clear images: ${error.message}`,
+        type: "error",
+      });
+    }
+  });
+
+  // Log any unhandled events
+  socket.onAny((eventName, ...args) => {
+    if (!["requestStatus", "requestImages"].includes(eventName)) {
+      ServerLogger.debug(userId, "unhandledEvent", "Received event", {
+        eventName,
+        args: args.length > 0 ? args : undefined,
+      });
+    }
+  });
+});
+
+// Add this helper function to periodically log system status
+setInterval(() => {
+  const status = cameraService.getStatus();
+  ServerLogger.debug(null, "systemStatus", "Periodic status check", {
+    ...status,
+    connectedClients: io.engine.clientsCount,
+  });
+}, 30000); // Log every 30 seconds
