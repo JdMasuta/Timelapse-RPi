@@ -11,6 +11,11 @@ const execAsync = promisify(exec);
 class CaptureController {
   constructor(outputDir) {
     this.outputDir = outputDir;
+    try {
+      fs.accessSync(this.outputDir, fs.constants.W_OK);
+    } catch (error) {
+      throw new Error(`Output directory is not writable: ${this.outputDir}`);
+    }
     Logger.info("CaptureController", "Capture controller initialized", {
       outputDir: this.outputDir,
     });

@@ -122,7 +122,13 @@ class StreamController {
     if (this.streamProcess) {
       try {
         const pid = this.streamProcess.pid;
-        this.streamProcess.kill("SIGKILL");
+        this.streamProcess.kill("SIGTERM");
+        // Give process time to terminate gracefully
+        setTimeout(() => {
+          if (this.streamProcess && !this.streamProcess.killed) {
+            this.streamProcess.kill("SIGKILL");
+          }
+        }, 1000);
         this.streamProcess = null;
         Logger.info("StreamController", "Stream process terminated", { pid });
         return true;
