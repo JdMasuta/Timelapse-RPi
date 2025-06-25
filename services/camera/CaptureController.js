@@ -1,5 +1,6 @@
 // services/camera/CaptureController.js - Single image capture logic
 
+const fs = require("fs");
 const { promisify } = require("util");
 const { exec } = require("child_process");
 const path = require("path");
