@@ -527,7 +527,7 @@ class VideoController {
     args.push("-y");
 
     // Input framerate
-    args.push("-framerate", options.fps.toString());
+    args.push("-framerate", "1");
 
     // Use sequential image pattern
     // FFmpeg will look for files like frame_000.jpg, frame_001.jpg, etc.
