@@ -736,7 +736,7 @@ async function initializeApp() {
           const capabilities = {
             codecs: ["h264", "h265"],
             qualities: ["low", "medium", "high", "ultra"],
-            fpsRange: { min: 1, max: 120 },
+            fpsRange: { min: 0.1, max: 120 },
             bitrateOptions: ["1M", "2M", "5M", "10M", "20M"],
             maxConcurrentJobs: 1,
             supportedFormats: ["mp4"],
