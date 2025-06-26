@@ -1,4 +1,4 @@
-// server.js
+// server.js - Updated with enhanced video generation capabilities
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
@@ -48,6 +48,14 @@ function formatTime(seconds) {
   return [h, m, s].map((v) => (v < 10 ? "0" + v : v)).join(":");
 }
 
+// Helper function to format file sizes
+function formatFileSize(bytes) {
+  const sizes = ["Bytes", "KB", "MB", "GB"];
+  if (bytes === 0) return "0 Bytes";
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i];
+}
+
 // Initialize configuration service
 const configService = new ConfigService();
 let fullConfig;
@@ -66,6 +74,94 @@ async function initializeApp() {
 
     // Serve static files from the current directory
     app.use(express.static(path.join(__dirname)));
+
+    // 🆕 Ensure videos directory exists
+    const videosDir = path.join(__dirname, "videos");
+    const fs = require("fs");
+    if (!fs.existsSync(videosDir)) {
+      fs.mkdirSync(videosDir, { recursive: true });
+      console.log("Videos directory created:", videosDir);
+    }
+
+    // 🆕 Video file serving routes
+    app.get("/videos/:filename", (req, res) => {
+      const filename = req.params.filename;
+
+      // Security: Validate filename
+      if (!filename || filename.includes("..") || filename.includes("/")) {
+        return res.status(400).json({ error: "Invalid filename" });
+      }
+
+      const videoPath = path.join(__dirname, "videos", filename);
+
+      // Check if file exists
+      if (!fs.existsSync(videoPath)) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+
+      // Set appropriate headers for video download
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`
+      );
+
+      // Stream the video file
+      const stream = fs.createReadStream(videoPath);
+      stream.on("error", (error) => {
+        console.error("Error streaming video:", error);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to stream video" });
+        }
+      });
+
+      stream.pipe(res);
+    });
+
+    // 🆕 Video streaming for preview
+    app.get("/videos/:filename/stream", (req, res) => {
+      const filename = req.params.filename;
+
+      // Security validation
+      if (!filename || filename.includes("..") || filename.includes("/")) {
+        return res.status(400).json({ error: "Invalid filename" });
+      }
+
+      const videoPath = path.join(__dirname, "videos", filename);
+
+      if (!fs.existsSync(videoPath)) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+
+      const stat = fs.statSync(videoPath);
+      const fileSize = stat.size;
+      const range = req.headers.range;
+
+      if (range) {
+        // Support range requests for video seeking
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = end - start + 1;
+        const file = fs.createReadStream(videoPath, { start, end });
+        const head = {
+          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": chunksize,
+          "Content-Type": "video/mp4",
+        };
+        res.writeHead(206, head);
+        file.pipe(res);
+      } else {
+        // Full file stream
+        const head = {
+          "Content-Length": fileSize,
+          "Content-Type": "video/mp4",
+        };
+        res.writeHead(200, head);
+        fs.createReadStream(videoPath).pipe(res);
+      }
+    });
 
     // Initialize camera service with full config
     const cameraService = new CameraService();
@@ -378,42 +474,279 @@ async function initializeApp() {
         }
       });
 
-      // Handle video generation
+      // ============================================================================
+      // 🆕 ENHANCED VIDEO GENERATION SOCKET HANDLERS
+      // ============================================================================
+
+      // Enhanced existing video generation handler
       socket.on("generateVideo", async () => {
         try {
-          console.log("Generating video with ffmpeg...");
+          console.log("Generating video with enhanced VideoController...");
+
+          // Check availability first
+          const availability =
+            await cameraService.checkVideoGenerationAvailable();
+          if (!availability.available) {
+            socket.emit("notification", {
+              message: availability.message,
+              type: "error",
+            });
+            io.emit("videoGenerationStatus", {
+              status: "error",
+              message: availability.message,
+            });
+            return;
+          }
+
+          // Emit initial status
           io.emit("videoGenerationStatus", {
-            status: "in-progress",
-            message: "Starting video generation...",
+            status: "starting",
+            message: `Starting video generation from ${availability.imageCount} images...`,
+            imageCount: availability.imageCount,
           });
 
+          // Generate video with progress tracking
           const result = await cameraService.generateVideo(
             currentConfig,
             (progress) => {
+              // Emit progress updates (throttled by VideoController)
               io.emit("videoGenerationStatus", {
                 status: "in-progress",
-                message: `Generating: ${progress}%`,
+                message: `Generating video: ${progress}%`,
                 progress: progress,
+              });
+            }
+          );
+
+          // Emit completion status
+          io.emit("videoGenerationStatus", {
+            status: "complete",
+            message: `Video generation complete!`,
+            result: {
+              filename: result.filename,
+              downloadUrl: result.downloadUrl,
+              size: result.size,
+              sizeFormatted: formatFileSize(result.size),
+              duration: result.duration,
+              frameCount: result.frameCount,
+              processingTime: result.processingTime,
+              metadata: result.metadata,
+            },
+          });
+
+          // Send success notification
+          socket.emit("notification", {
+            message: `Time-lapse video generated: ${result.filename}`,
+            type: "success",
+          });
+
+          // Refresh video list for all clients
+          try {
+            const videoList = await cameraService.getVideoList();
+            io.emit("videoListUpdate", videoList);
+          } catch (error) {
+            console.error(
+              "Error refreshing video list after generation:",
+              error
+            );
+          }
+        } catch (error) {
+          console.error("Video generation failed:", error);
+
+          // Emit error status
+          io.emit("videoGenerationStatus", {
+            status: "error",
+            message: `Video generation failed: ${error.message}`,
+            error: {
+              code: error.code,
+              phase: error.phase,
+              processingTime: error.processingTime,
+            },
+          });
+
+          // Send error notification
+          socket.emit("notification", {
+            message: `Video generation failed: ${error.message}`,
+            type: "error",
+          });
+        }
+      });
+
+      // 🆕 Cancel video generation
+      socket.on("cancelVideoGeneration", async () => {
+        try {
+          console.log("Cancelling video generation...");
+
+          const cancelled = await cameraService.cancelVideoGeneration();
+
+          if (cancelled) {
+            io.emit("videoGenerationStatus", {
+              status: "cancelled",
+              message: "Video generation cancelled by user",
+            });
+
+            socket.emit("notification", {
+              message: "Video generation cancelled successfully",
+              type: "info",
+            });
+          } else {
+            socket.emit("notification", {
+              message: "No video generation in progress to cancel",
+              type: "warning",
+            });
+          }
+        } catch (error) {
+          console.error("Error cancelling video generation:", error);
+          socket.emit("notification", {
+            message: `Failed to cancel video generation: ${error.message}`,
+            type: "error",
+          });
+        }
+      });
+
+      // 🆕 Get video processing status
+      socket.on("getVideoStatus", () => {
+        try {
+          const videoStatus = cameraService.getVideoProcessingStatus();
+          socket.emit("videoStatusUpdate", videoStatus);
+        } catch (error) {
+          console.error("Error getting video status:", error);
+          socket.emit("notification", {
+            message: "Failed to get video status",
+            type: "error",
+          });
+        }
+      });
+
+      // 🆕 Delete video file
+      socket.on("deleteVideo", async (filename) => {
+        try {
+          console.log("Deleting video:", filename);
+
+          const deleted = await cameraService.deleteVideo(filename);
+
+          if (deleted) {
+            socket.emit("notification", {
+              message: `Video '${filename}' deleted successfully`,
+              type: "success",
+            });
+
+            // Refresh video list for all clients
+            try {
+              const videoList = await cameraService.getVideoList();
+              io.emit("videoListUpdate", videoList);
+            } catch (error) {
+              console.error(
+                "Error refreshing video list after deletion:",
+                error
+              );
+            }
+          } else {
+            socket.emit("notification", {
+              message: `Failed to delete video '${filename}'`,
+              type: "error",
+            });
+          }
+        } catch (error) {
+          console.error("Error deleting video:", error);
+          socket.emit("notification", {
+            message: `Error deleting video: ${error.message}`,
+            type: "error",
+          });
+        }
+      });
+
+      // 🆕 Quick video generation (low quality for preview)
+      socket.on("generateQuickVideo", async () => {
+        try {
+          console.log("Generating quick preview video...");
+
+          // Check availability
+          const availability =
+            await cameraService.checkVideoGenerationAvailable();
+          if (!availability.available) {
+            socket.emit("notification", {
+              message: availability.message,
+              type: "error",
+            });
+            return;
+          }
+
+          // Override config for quick generation
+          const quickConfig = {
+            ...currentConfig,
+            videoFps: 15,
+            videoQuality: "low",
+            videoCodec: "h264",
+          };
+
+          io.emit("videoGenerationStatus", {
+            status: "starting",
+            message: "Starting quick preview generation...",
+            type: "preview",
+          });
+
+          const result = await cameraService.generateVideo(
+            quickConfig,
+            (progress) => {
+              io.emit("videoGenerationStatus", {
+                status: "in-progress",
+                message: `Generating preview: ${progress}%`,
+                progress: progress,
+                type: "preview",
               });
             }
           );
 
           io.emit("videoGenerationStatus", {
             status: "complete",
-            message: `Video generation complete! File: ${result.filename}`,
+            message: "Quick preview generated!",
+            result: result,
+            type: "preview",
           });
+
           socket.emit("notification", {
-            message: `Time-lapse video generated: ${result.filename}`,
+            message: `Quick preview generated: ${result.filename}`,
             type: "success",
           });
+
+          // Refresh video list
+          try {
+            const videoList = await cameraService.getVideoList();
+            io.emit("videoListUpdate", videoList);
+          } catch (error) {
+            console.error(
+              "Error refreshing video list after quick generation:",
+              error
+            );
+          }
         } catch (error) {
-          console.error("Video generation failed:", error);
+          console.error("Quick video generation failed:", error);
           io.emit("videoGenerationStatus", {
             status: "error",
-            message: `Video generation failed: ${error.message}`,
+            message: `Quick preview failed: ${error.message}`,
+            type: "preview",
           });
+        }
+      });
+
+      // 🆕 Get video generation capabilities
+      socket.on("getVideoCapabilities", () => {
+        try {
+          const capabilities = {
+            codecs: ["h264", "h265"],
+            qualities: ["low", "medium", "high", "ultra"],
+            fpsRange: { min: 1, max: 120 },
+            bitrateOptions: ["1M", "2M", "5M", "10M", "20M"],
+            maxConcurrentJobs: 1,
+            supportedFormats: ["mp4"],
+          };
+
+          socket.emit("videoCapabilities", capabilities);
+        } catch (error) {
+          console.error("Error getting video capabilities:", error);
           socket.emit("notification", {
-            message: `Video generation failed: ${error.message}`,
+            message: "Failed to get video capabilities",
             type: "error",
           });
         }
@@ -469,10 +802,10 @@ async function initializeApp() {
         }
       });
 
-      // Handle video refresh
+      // Enhanced existing video refresh handler
       socket.on("refreshVideos", async () => {
         try {
-          console.log("Refreshing videos...");
+          console.log("Refreshing videos with enhanced metadata...");
           const videoList = await cameraService.getVideoList();
           socket.emit("videoListUpdate", videoList);
           socket.emit("notification", {
@@ -500,7 +833,7 @@ async function initializeApp() {
       console.log(`Open your browser to http://localhost:${fullConfig.port}`);
     });
 
-    // --- System Info Simulation ---
+    // --- Enhanced System Info with Video Status ---
     let systemInfoInterval = setInterval(() => {
       const memoryUsage = `${(
         process.memoryUsage().heapUsed /
@@ -510,12 +843,58 @@ async function initializeApp() {
       const uptimeSeconds = process.uptime();
       const systemUptime = formatTime(uptimeSeconds);
 
+      // Get enhanced status including video processing
+      const fullStatus = cameraService.getStatus();
+
       io.emit("systemInfoUpdate", {
         memoryUsage: memoryUsage,
         systemUptime: systemUptime,
         streamStatus: cameraService.isStreamActive() ? "Streaming" : "Stopped",
+        // Add video processing status
+        videoStatus: fullStatus.videoProcessing,
       });
     }, 5000); // Update every 5 seconds
+
+    // ============================================================================
+    // 🆕 GRACEFUL SHUTDOWN ENHANCEMENT
+    // ============================================================================
+
+    // Add graceful shutdown handling with video processing cleanup
+    const gracefulShutdown = async (signal) => {
+      console.log(`${signal} received, shutting down gracefully...`);
+
+      // Cancel any ongoing video generation
+      try {
+        await cameraService.cancelVideoGeneration();
+        console.log("Video generation cancelled during shutdown");
+      } catch (error) {
+        console.error(
+          "Error cancelling video generation during shutdown:",
+          error
+        );
+      }
+
+      // Cleanup camera service
+      cameraService.cleanup();
+
+      // Clear intervals
+      clearInterval(systemInfoInterval);
+
+      // Close server
+      server.close(() => {
+        console.log("Server closed");
+        process.exit(0);
+      });
+
+      // Force exit after 10 seconds
+      setTimeout(() => {
+        console.log("Forced shutdown after timeout");
+        process.exit(1);
+      }, 10000);
+    };
+
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
   } catch (error) {
     console.error("Failed to initialize application:", error);
     process.exit(1);
