@@ -49,7 +49,7 @@ echo "✅ Node.js installed successfully"
 
 # Install dependencies
 echo "📦 Installing system dependencies..."
-sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++
+sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++ ffmpeg
 
 # Clone or update MJPG-Streamer
 echo "🎥 Preparing MJPG-Streamer..."
