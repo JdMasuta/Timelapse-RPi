@@ -13,6 +13,7 @@ class VideoConfig {
       capturesDir:
         process.env.CAPTURES_DIR ||
         path.join(__dirname, "..", "..", "captures"),
+      tempDir: process.env.TEMP_DIR || path.join(__dirname, "..", "..", "temp"),
       ffmpegPath: process.env.FFMPEG_PATH || "ffmpeg",
 
       // Security limits
