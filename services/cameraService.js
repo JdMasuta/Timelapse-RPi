@@ -1,4 +1,4 @@
-// services/cameraService.js - Main orchestrator (much cleaner!)
+// services/cameraService.js - Updated with VideoController integration
 
 const fs = require("fs").promises;
 const path = require("path");
@@ -9,8 +9,13 @@ const OperationQueue = require("./camera/OperationQueue");
 const StreamController = require("./camera/StreamController");
 const TimelapseController = require("./camera/TimelapseController");
 const CaptureController = require("./camera/CaptureController");
+const VideoController = require("./video/VideoController"); // 🆕 Import VideoController
 const OperationContext = require("./camera/OperationContext");
-const { OPERATION_PRIORITIES, DEFAULT_PATHS } = require("./camera/constants");
+const {
+  OPERATION_PRIORITIES,
+  DEFAULT_PATHS,
+  VIDEO_CONFIG,
+} = require("./camera/constants");
 
 class CameraService {
   constructor() {
@@ -24,11 +29,15 @@ class CameraService {
     this.timelapseController = new TimelapseController(this.captureController);
     this.operationQueue = new OperationQueue();
 
+    // 🆕 Initialize VideoController (separate from main operation queue)
+    this.videoController = new VideoController();
+
     // Bind context for callbacks
     this.continueNextOperation = this.continueNextOperation.bind(this);
 
     Logger.info("constructor", "CameraService initialized", {
       outputDir: this.outputDir,
+      videosDir: DEFAULT_PATHS.videosDir,
       platform: process.platform,
     });
 
@@ -49,7 +58,7 @@ class CameraService {
   }
 
   // ============================================================================
-  // QUEUE MANAGEMENT METHODS
+  // EXISTING CAMERA OPERATION QUEUE METHODS (UNCHANGED)
   // ============================================================================
 
   async queueOperation(type, config, callbacks = {}, priority) {
@@ -86,7 +95,9 @@ class CameraService {
       Logger.info(
         "queueOperation",
         "No current operation, starting immediately",
-        { type }
+        {
+          type,
+        }
       );
       await this.startOperation(operation);
       return;
@@ -296,7 +307,7 @@ class CameraService {
   }
 
   // ============================================================================
-  // PUBLIC API METHODS
+  // EXISTING CAMERA API METHODS (UNCHANGED)
   // ============================================================================
 
   async captureImage(config, notifyCallback = null) {
@@ -380,7 +391,431 @@ class CameraService {
   }
 
   // ============================================================================
-  // OPERATION IMPLEMENTATIONS
+  // 🆕 VIDEO GENERATION METHODS FOR SOCKET.IO ARCHITECTURE
+  // ============================================================================
+
+  /**
+   * Generate video from captured timelapse images
+   * Compatible with existing Socket.IO architecture
+   *
+   * @param {object} config - Configuration object from frontend
+   * @param {function} onProgress - Progress callback for real-time updates
+   * @returns {Promise<object>} Video generation result
+   */
+  async generateVideo(config, onProgress = null) {
+    const startTime = Date.now();
+
+    Logger.info("generateVideo", "Video generation requested via Socket.IO", {
+      config: {
+        videoFps: config.videoFps,
+        videoQuality: config.videoQuality,
+        videoCodec: config.videoCodec,
+        videoBitrate: config.videoBitrate,
+        hasProgressCallback: !!onProgress,
+      },
+    });
+
+    try {
+      // Check if video generation is available
+      const availability = await this.checkVideoGenerationAvailable();
+      if (!availability.available) {
+        throw new Error(availability.message);
+      }
+
+      // Map frontend config to VideoController options
+      const videoOptions = this.mapConfigToVideoOptions(config, onProgress);
+
+      Logger.info("generateVideo", "Starting video generation", {
+        inputFolder: this.outputDir,
+        imageCount: availability.imageCount,
+        options: videoOptions,
+      });
+
+      // Generate the video using our production VideoController
+      const result = await this.videoController.createVideo(
+        this.outputDir,
+        videoOptions
+      );
+
+      const duration = Date.now() - startTime;
+
+      Logger.info("generateVideo", "Video generation completed successfully", {
+        filename: result.filename,
+        size: result.size,
+        processingTime: duration,
+        sourceImages: availability.imageCount,
+      });
+
+      // Return result in format expected by Socket.IO handlers
+      return {
+        filename: result.filename,
+        filepath: result.outputPath,
+        size: result.size,
+        duration: result.durationSeconds,
+        frameCount: result.frameCount,
+        processingTime: duration,
+        downloadUrl: `/videos/${result.filename}`,
+        metadata: {
+          fps: result.fps,
+          codec: result.codec,
+          quality: result.quality,
+          sourceImages: availability.imageCount,
+          createdAt: result.createdAt,
+        },
+      };
+    } catch (error) {
+      const duration = Date.now() - startTime;
+
+      Logger.error("generateVideo", "Video generation failed", {
+        error: error.message,
+        errorCode: error.code,
+        duration,
+        config,
+      });
+
+      // Re-throw with enhanced error information for Socket.IO handlers
+      const enhancedError = new Error(error.message);
+      enhancedError.code = error.code || "VIDEO_GENERATION_ERROR";
+      enhancedError.processingTime = duration;
+      enhancedError.phase = this.determineErrorPhase(error);
+
+      throw enhancedError;
+    }
+  }
+
+  /**
+   * Map frontend configuration to VideoController options
+   * @private
+   */
+  mapConfigToVideoOptions(config, onProgress) {
+    // Set defaults from VIDEO_CONFIG constants
+    const fps = parseInt(config.videoFps) || VIDEO_CONFIG.defaultFps;
+    const quality = this.mapQualityFromConfig(config.videoQuality);
+    const codec = this.mapCodecFromConfig(config.videoCodec);
+
+    // Handle bitrate conversion (frontend sends "5M", we need 5000)
+    let bitrate = null;
+    if (config.videoBitrate) {
+      bitrate = config.videoBitrate.toString();
+    } else if (process.env.VIDEO_BITRATE) {
+      bitrate = process.env.VIDEO_BITRATE;
+    }
+
+    const options = {
+      fps,
+      quality,
+      codec,
+      bitrate,
+
+      // Wrap progress callback for Socket.IO format
+      onProgress: onProgress
+        ? (progress, frame, total) => {
+            try {
+              // Call the Socket.IO progress callback with just the percentage
+              onProgress(Math.round(progress));
+            } catch (error) {
+              Logger.warn("generateVideo", "Progress callback error", {
+                error: error.message,
+              });
+            }
+          }
+        : null,
+
+      // Enhanced completion callback
+      onComplete: (result) => {
+        Logger.info("generateVideo", "Video generation completed callback", {
+          filename: result.filename,
+          size: result.size,
+        });
+      },
+
+      // Enhanced error callback
+      onError: (error) => {
+        Logger.error("generateVideo", "Video generation error callback", {
+          error: error.message,
+          errorCode: error.code,
+        });
+      },
+    };
+
+    // Validate options
+    this.validateVideoOptions(options);
+
+    return options;
+  }
+
+  /**
+   * Map frontend quality setting to VideoController quality
+   * @private
+   */
+  mapQualityFromConfig(frontendQuality) {
+    const qualityMap = {
+      low: "low",
+      medium: "medium",
+      high: "high",
+      ultra: "high", // Map ultra to high since VideoController only has 3 levels
+    };
+
+    return qualityMap[frontendQuality] || "medium";
+  }
+
+  /**
+   * Map frontend codec setting to VideoController codec
+   * @private
+   */
+  mapCodecFromConfig(frontendCodec) {
+    const codecMap = {
+      h264: "h264",
+      h265: "h265",
+      vp9: "h264", // Fallback VP9 to H264 since VideoController doesn't support VP9 yet
+    };
+
+    return codecMap[frontendCodec] || "h264";
+  }
+
+  /**
+   * Validate video generation options
+   * @private
+   */
+  validateVideoOptions(options) {
+    if (options.fps < 1 || options.fps > 120) {
+      throw new Error(
+        `Invalid frame rate: ${options.fps}. Must be between 1 and 120 FPS.`
+      );
+    }
+
+    if (!["low", "medium", "high"].includes(options.quality)) {
+      throw new Error(
+        `Invalid quality: ${options.quality}. Must be low, medium, or high.`
+      );
+    }
+
+    if (!["h264", "h265"].includes(options.codec)) {
+      throw new Error(`Invalid codec: ${options.codec}. Must be h264 or h265.`);
+    }
+
+    if (options.bitrate && (options.bitrate < 100 || options.bitrate > 50000)) {
+      throw new Error(
+        `Invalid bitrate: ${options.bitrate}. Must be between 100 and 50000 kbps.`
+      );
+    }
+  }
+
+  /**
+   * Check if video generation is possible
+   * @returns {Promise<object>} Availability status
+   */
+  async checkVideoGenerationAvailable() {
+    try {
+      // Check if VideoController is processing
+      const videoStatus = this.videoController.getStatus();
+      if (videoStatus.isProcessing) {
+        return {
+          available: false,
+          imageCount: 0,
+          message: "Video generation already in progress",
+        };
+      }
+
+      // Check for available images
+      const files = await fs.readdir(this.outputDir);
+      const imageFiles = files.filter(
+        (file) =>
+          file.toLowerCase().endsWith(".jpg") ||
+          file.toLowerCase().endsWith(".jpeg")
+      );
+
+      if (imageFiles.length === 0) {
+        return {
+          available: false,
+          imageCount: 0,
+          message:
+            "No images found. Please capture some timelapse images first.",
+        };
+      }
+
+      // Check for valid timelapse images
+      const validImages = imageFiles.filter((file) => {
+        return file.match(
+          /timelapse_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.(jpg|jpeg)$/i
+        );
+      });
+
+      if (validImages.length < 2) {
+        return {
+          available: false,
+          imageCount: imageFiles.length,
+          message:
+            "At least 2 timelapse images are required for video generation.",
+        };
+      }
+
+      return {
+        available: true,
+        imageCount: validImages.length,
+        message: `Ready to generate video from ${validImages.length} images`,
+      };
+    } catch (error) {
+      Logger.error(
+        "checkVideoGenerationAvailable",
+        "Error checking availability",
+        {
+          error: error.message,
+        }
+      );
+
+      return {
+        available: false,
+        imageCount: 0,
+        message: `Error checking images: ${error.message}`,
+      };
+    }
+  }
+
+  /**
+   * Cancel ongoing video generation
+   * @returns {Promise<boolean>} Success status
+   */
+  async cancelVideoGeneration() {
+    Logger.info(
+      "cancelVideoGeneration",
+      "Video cancellation requested via Socket.IO"
+    );
+
+    try {
+      const cancelled = await this.videoController.cancelVideoCreation();
+
+      if (cancelled) {
+        Logger.info(
+          "cancelVideoGeneration",
+          "Video generation cancelled successfully"
+        );
+      } else {
+        Logger.warn(
+          "cancelVideoGeneration",
+          "No video generation in progress to cancel"
+        );
+      }
+
+      return cancelled;
+    } catch (error) {
+      Logger.error(
+        "cancelVideoGeneration",
+        "Error cancelling video generation",
+        {
+          error: error.message,
+        }
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Get video processing status for Socket.IO
+   * @returns {object} Video processing status
+   */
+  getVideoProcessingStatus() {
+    const status = this.videoController.getStatus();
+
+    return {
+      isProcessing: status.isProcessing,
+      hasCurrentJob: !!status.currentJob,
+      currentJob: status.currentJob
+        ? {
+            startTime: status.currentJob.startTime,
+            duration: Date.now() - status.currentJob.startTime,
+          }
+        : null,
+      metrics: status.metrics,
+    };
+  }
+
+  /**
+   * Get list of generated videos (enhanced for Socket.IO)
+   * @returns {Promise<Array>} List of videos with enhanced metadata
+   */
+  async getVideoList() {
+    try {
+      const videos = await this.videoController.listVideos();
+
+      // Enhance video list with download URLs and formatted data
+      return videos.map((video) => ({
+        ...video,
+        downloadUrl: `/videos/${video.filename}`,
+        sizeFormatted: this.formatFileSize(video.size),
+        createdFormatted: new Date(video.created).toLocaleString(),
+      }));
+    } catch (error) {
+      Logger.error("getVideoList", "Error getting video list", {
+        error: error.message,
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Delete a video file
+   * @param {string} filename - Video filename to delete
+   * @returns {Promise<boolean>} Success status
+   */
+  async deleteVideo(filename) {
+    Logger.info("deleteVideo", "Video deletion requested via Socket.IO", {
+      filename,
+    });
+
+    try {
+      const deleted = await this.videoController.deleteVideo(filename);
+
+      if (deleted) {
+        Logger.info("deleteVideo", "Video deleted successfully", { filename });
+      } else {
+        Logger.warn("deleteVideo", "Video not found or could not be deleted", {
+          filename,
+        });
+      }
+
+      return deleted;
+    } catch (error) {
+      Logger.error("deleteVideo", "Error deleting video", {
+        filename,
+        error: error.message,
+      });
+      return false;
+    }
+  }
+
+  // ============================================================================
+  // 🆕 UTILITY METHODS FOR SOCKET.IO INTEGRATION
+  // ============================================================================
+
+  /**
+   * Format file size in human-readable format
+   * @private
+   */
+  formatFileSize(bytes) {
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    if (bytes === 0) return "0 Bytes";
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i];
+  }
+
+  /**
+   * Determine error phase for better error reporting
+   * @private
+   */
+  determineErrorPhase(error) {
+    if (error.name === "ValidationError") return "validation";
+    if (error.name === "SecurityError") return "security_check";
+    if (error.name === "ResourceError") return "resource_check";
+    if (error.name === "ProcessError") return "video_encoding";
+    if (error.message.includes("images") || error.message.includes("scan"))
+      return "image_analysis";
+    if (error.message.includes("ffmpeg")) return "video_encoding";
+    return "unknown";
+  }
+
+  // ============================================================================
+  // OPERATION IMPLEMENTATIONS (UNCHANGED)
   // ============================================================================
 
   async _doStartStream(op) {
@@ -425,7 +860,7 @@ class CameraService {
   }
 
   // ============================================================================
-  // UTILITY AND STATUS METHODS
+  // UTILITY AND STATUS METHODS (UPDATED)
   // ============================================================================
 
   isStreamActive() {
@@ -436,6 +871,7 @@ class CameraService {
     const timelapseStatus = this.timelapseController.getStatus();
     const streamStatus = this.streamController.getStatus();
     const queueStatus = this.operationQueue.getStatus();
+    const videoStatus = this.getVideoProcessingStatus(); // Use our enhanced method
 
     const status = {
       isCapturing: timelapseStatus.isCapturing,
@@ -445,9 +881,11 @@ class CameraService {
       currentOperation: queueStatus.currentOperation?.type || null,
       queueLength: queueStatus.queueLength,
       streamPid: streamStatus.pid,
+      // Enhanced video status for Socket.IO
+      videoProcessing: videoStatus,
     };
 
-    Logger.debug("getStatus", "Status requested", status);
+    //Logger.debug("getStatus", "Status requested with video info", status);
     return status;
   }
 
@@ -509,6 +947,8 @@ class CameraService {
       this.timelapseController.cleanup();
       this.streamController.cleanup();
       this.operationQueue.clear();
+      // 🆕 Clean up video controller
+      this.videoController.cleanup();
       Logger.info("cleanup", "Cleanup completed successfully");
     } catch (error) {
       Logger.error("cleanup", "Error during cleanup", { error: error.message });
