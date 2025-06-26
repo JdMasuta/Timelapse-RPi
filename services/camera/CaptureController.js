@@ -6,6 +6,7 @@ const { exec } = require("child_process");
 const path = require("path");
 const Logger = require("./Logger");
 const { RESOLUTIONS } = require("./constants");
+const { time } = require("console");
 
 const execAsync = promisify(exec);
 
@@ -37,9 +38,16 @@ class CaptureController {
   /**
    * Generate filename for capture
    */
-  generateFilename(prefix = "timelapse") {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  generateFilename(prefix = "timelapse", timestamp = null) {
     return `${prefix}_${timestamp}.jpg`;
+  }
+
+  /**
+   * Generate a timestamp string for filenames
+   */
+
+  generateTimestamp() {
+    return new Date().toISOString().replace(/[:.]/g, "-");
   }
 
   /**
@@ -47,10 +55,11 @@ class CaptureController {
    */
   async captureImage(config, filename = null) {
     const resolution = this.getResolutionForQuality(config.imageQuality);
-    const imageFilename = filename || this.generateFilename();
+    const timestamp = this.generateTimestamp();
+    const imageFilename = filename || this.generateFilename(timestamp);
     const filepath = path.join(this.outputDir, imageFilename);
 
-    const cmd = `fswebcam -r ${resolution} --no-banner "${filepath}"`;
+    const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}"`;
 
     Logger.info("CaptureController", "Executing capture command", {
       cmd,
