@@ -22,10 +22,10 @@ class StreamController {
    */
   isActive() {
     const active = this.streamProcess !== null;
-    Logger.debug("StreamController", "Stream status checked", {
-      active,
-      pid: this.streamProcess?.pid,
-    });
+    // Logger.debug("StreamController", "Stream status checked", {
+    //   active,
+    //   pid: this.streamProcess?.pid,
+    // });
     return active;
   }
 
