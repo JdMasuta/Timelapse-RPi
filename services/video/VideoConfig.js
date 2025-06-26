@@ -18,9 +18,9 @@ class VideoConfig {
 
       // Security limits
       maxInputImages: parseInt(process.env.MAX_INPUT_IMAGES) || 10000,
-      maxVideoDuration: parseInt(process.env.MAX_VIDEO_DURATION) || 3600, // seconds
+      maxVideoDuration: parseInt(process.env.MAX_VIDEO_DURATION) || 36000, // seconds
       maxVideoSize:
-        parseInt(process.env.MAX_VIDEO_SIZE) || 2 * 1024 * 1024 * 1024, // 2GB
+        parseInt(process.env.MAX_VIDEO_SIZE) || 6 * 1024 * 1024 * 1024, // 6GB
       maxConcurrentJobs: parseInt(process.env.MAX_CONCURRENT_JOBS) || 1,
 
       // Process limits
