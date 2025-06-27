@@ -39,6 +39,7 @@ class CaptureController {
    * Generate filename for capture
    */
   generateFilename(prefix = "timelapse", timestamp = null) {
+    !!timestamp ? timelapse : this.generateTimestamp();
     return `${prefix}_${timestamp}.jpg`;
   }
 
@@ -54,10 +55,11 @@ class CaptureController {
    * Capture a single image
    */
   async captureImage(config, filename = null) {
-    const resolution = this.getResolutionForQuality(config.imageQuality);
+    const resolution = "3840x2160"; // this.getResolutionForQuality(config.imageQuality);
     const timestamp = this.generateTimestamp();
     const imageFilename = filename || this.generateFilename(timestamp);
     const filepath = path.join(this.outputDir, imageFilename);
+    const font_size = 45; // Adjust font size as needed
 
     const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}"`;
 
