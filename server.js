@@ -803,7 +803,7 @@ async function initializeApp() {
       });
 
       // Images download handler
-      socket.on("downloadImage", async () => {
+      socket.on("downloadImages", async () => {
         try {
           console.log("Downloading images...");
 
