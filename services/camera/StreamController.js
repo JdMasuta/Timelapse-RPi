@@ -78,7 +78,7 @@ class StreamController {
         "-i",
         `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,
         "-o",
-        "-vf 'transpose=2'", // Rotate video 180 degreess if needed
+        "-rot -180", // Rotate video 180 degreess if needed
         `output_http.so -w ${this.mjpegStreamerWwwPath} -p ${STREAM_CONFIG.port}`,
       ];
 
