@@ -61,7 +61,7 @@ class CaptureController {
     const filepath = path.join(this.outputDir, imageFilename);
     const font_size = "45"; // Adjust font size as needed
 
-    const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}" --font :45`;
+    const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}" --font ":45"`;
 
     Logger.info("CaptureController", "Executing capture command", {
       cmd,
