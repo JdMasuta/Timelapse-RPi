@@ -802,6 +802,47 @@ async function initializeApp() {
         }
       });
 
+      // Images download handler
+      socket.on("downloadImage", async () => {
+        try {
+          console.log("Downloading images...");
+
+          // Get the list of images
+          const imageList = await cameraService.getImageList();
+          if (imageList.length === 0) {
+            socket.emit("notification", {
+              message: "No images available for download.",
+              type: "info",
+            });
+            return;
+          }
+
+          // Create a zip file of all images
+          const zipFilePath = await cameraService.createImageZip();
+
+          // Emit the download URL
+          socket.emit("imageDownloadReady", {
+            url: `/images/download/${path.basename(zipFilePath)}`,
+            filename: path.basename(zipFilePath),
+          });
+
+          socket.emit("notification", {
+            message: "Images zipped and ready for download!",
+            type: "success",
+          });
+        } catch (error) {
+          console.error("Failed to download images:", error);
+          socket.emit("notification", {
+            message: `Failed to download images: ${error.message}`,
+            type: "error",
+          });
+        }
+      });
+
+      socket.on("imageDownloadReady", (url, filename) => {
+        console.log("Image download ready:", url, filename);
+      });
+
       // Enhanced existing video refresh handler
       socket.on("refreshVideos", async () => {
         try {

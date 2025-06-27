@@ -2,6 +2,7 @@
 
 const fs = require("fs").promises;
 const path = require("path");
+const AdmZip = require("adm-zip");
 
 // Import our modular components
 const Logger = require("./camera/Logger");
@@ -917,6 +918,106 @@ class CameraService {
       });
       return [];
     }
+  }
+
+  // Complete createImageZip method:
+  async createImageZip() {
+    try {
+      Logger.info("createImageZip", "Starting image zip creation");
+
+      // Ensure temp directory exists
+      const tempDir = path.join(this.outputDir, "temp");
+      await fs.mkdir(tempDir, { recursive: true });
+
+      const zipFilePath = path.join(tempDir, "images.zip");
+
+      // Create new zip instance
+      const zip = new AdmZip();
+
+      // Read all files from output directory
+      const files = await fs.readdir(this.outputDir);
+
+      // Filter for image files only
+      const imageFiles = files.filter((file) => {
+        const ext = path.extname(file).toLowerCase();
+        return (
+          ext === ".jpg" || ext === ".jpeg" || ext === ".png" || ext === ".bmp"
+        );
+      });
+
+      if (imageFiles.length === 0) {
+        throw new Error("No image files found to zip");
+      }
+
+      Logger.info("createImageZip", "Adding images to zip", {
+        imageCount: imageFiles.length,
+        outputDir: this.outputDir,
+      });
+
+      // Add each image file to the zip
+      for (const imageFile of imageFiles) {
+        const imagePath = path.join(this.outputDir, imageFile);
+
+        try {
+          // Read file and add to zip
+          const fileData = await fs.readFile(imagePath);
+          zip.addFile(imageFile, fileData);
+
+          Logger.debug("createImageZip", `Added file to zip: ${imageFile}`);
+        } catch (fileError) {
+          Logger.warn(
+            "createImageZip",
+            `Failed to add file to zip: ${imageFile}`,
+            {
+              error: fileError.message,
+            }
+          );
+          // Continue with other files even if one fails
+        }
+      }
+
+      // Write the zip file
+      await new Promise((resolve, reject) => {
+        zip.writeZip(zipFilePath, (error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+
+      // Verify the zip file was created and get its size
+      const zipStats = await fs.stat(zipFilePath);
+
+      Logger.info("createImageZip", "Image zip created successfully", {
+        zipPath: zipFilePath,
+        fileCount: imageFiles.length,
+        zipSize: zipStats.size,
+        zipSizeFormatted: this.formatFileSize(zipStats.size),
+      });
+
+      return {
+        zipFilePath,
+        imageCount: imageFiles.length,
+        zipSize: zipStats.size,
+        zipSizeFormatted: this.formatFileSize(zipStats.size),
+      };
+    } catch (err) {
+      Logger.error("createImageZip", "Failed to create image zip", {
+        error: err.message,
+        stack: err.stack,
+      });
+      throw err;
+    }
+  }
+
+  // Helper method to format file sizes (add this if not already present):
+  formatFileSize(bytes) {
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    if (bytes === 0) return "0 Bytes";
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i];
   }
 
   async clearImages() {

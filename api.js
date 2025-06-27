@@ -320,6 +320,10 @@ function clearImages() {
   socket.emit("clearImages");
 }
 
+function downloadImages() {
+  socket.emit("downloadImages");
+}
+
 function refreshVideos() {
   socket.emit("refreshVideos");
 }
