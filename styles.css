@@ -137,6 +137,8 @@ body {
   height: auto;
   display: block; /* Ensure it takes full width */
   object-fit: contain; /* Ensure the whole image is visible */
+  /* Rotate the live stream 180 degrees */
+  transform: rotate(180deg);
 }
 
 #streamPlaceholder {
