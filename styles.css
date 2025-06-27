@@ -235,6 +235,10 @@ body {
   margin-bottom: 30px;
 }
 
+.main-grid .panel:first-child {
+  display: none;
+}
+
 .config-section {
   margin-bottom: 25px;
   border-bottom: 1px dashed #ecf0f1;
