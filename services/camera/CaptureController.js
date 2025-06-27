@@ -61,7 +61,7 @@ class CaptureController {
     const filepath = path.join(this.outputDir, imageFilename);
     const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:45"; // Adjust font size as needed
 
-    const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}" --font ${font} --no-banner`;
+    const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}" --font ${font}`;
 
     Logger.info("CaptureController", "Executing capture command", {
       cmd,
