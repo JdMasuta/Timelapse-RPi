@@ -818,11 +818,12 @@ async function initializeApp() {
           }
 
           // Create a zip file of all images
-          const zipFilePath = await cameraService.createImageZip();
+          const zipFilePath = (await cameraService.createImageZip())
+            .zipFilePath;
 
           // Emit the download URL
           socket.emit("imageDownloadReady", {
-            url: `/images/download/${path.basename(zipFilePath)}`,
+            url: path.basename(zipFilePath),
             filename: path.basename(zipFilePath),
           });
 
@@ -837,10 +838,6 @@ async function initializeApp() {
             type: "error",
           });
         }
-      });
-
-      socket.on("imageDownloadReady", (url, filename) => {
-        console.log("Image download ready:", url, filename);
       });
 
       // Enhanced existing video refresh handler

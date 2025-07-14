@@ -1,6 +1,9 @@
 // api.js - Enhanced API with comprehensive configuration support
 const socket = io(); // Connects to the Socket.IO server on the same host and port
 
+socket.on("connect", () => {
+  console.log("Connected to the server via Socket.IO");
+});
 // Event listeners for incoming data from the server
 socket.on("statusUpdate", (data) => {
   document.getElementById("captureStatus").textContent = data.captureStatus;
@@ -17,6 +20,45 @@ socket.on("statusUpdate", (data) => {
   } else {
     startBtn.disabled = false;
     stopBtn.disabled = true;
+  }
+});
+
+// Enhanced image download listener
+socket.on("imageDownloadReady", ({ url, filename }) => {
+  // Ensure URL is absolute
+  url = "/temp/" + url;
+
+  // Automatically start the download
+  try {
+    // Create a temporary download link
+    const downloadLink = document.createElement("a");
+    downloadLink.href = url;
+    downloadLink.download = filename || "images.zip"; // Use provided filename or default
+    downloadLink.style.display = "none";
+
+    // Add to DOM, click, and remove
+    document.body.appendChild(downloadLink);
+    console.log("Starting download for:", filename);
+    // Trigger the download
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+
+    // Optional: Show success notification
+    showNotification(`Download started: ${filename}`, "success");
+  } catch (error) {
+    console.error("Failed to start download:", error);
+
+    // Fallback: Open in new tab if direct download fails
+    try {
+      window.open(url, "_blank");
+      showNotification("Download opened in new tab", "info");
+    } catch (fallbackError) {
+      console.error("Fallback download also failed:", fallbackError);
+      showNotification(
+        "Failed to start download. Please try manually.",
+        "error"
+      );
+    }
   }
 });
 
