@@ -5,6 +5,12 @@ yarn-debug.log*
 yarn-error.log*
 .package-lock.json
 
+# Dev Instructions
+*.md
+
+# New version of the project
+timelapse-rpi-v2/
+
 # Runtime data
 pids
 *.pid
