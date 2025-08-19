@@ -206,6 +206,9 @@ async function initializeApp() {
           'liveStreamUrl',
           `http://${SERVER_IP_ADDRESS}:8080/?action=stream`
         );
+        console.log(
+          `Live stream URL sent to client: http://${SERVER_IP_ADDRESS}:8080/?action=stream`
+        );
       } else {
         socket.emit('streamStatusUpdate', 'Stopped');
         socket.emit('liveStreamUrl', ''); // Clear URL if not streaming
