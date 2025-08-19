@@ -31,13 +31,9 @@ function getServerIpAddress() {
   console.log('Available interfaces:', Object.keys(interfaces));
 
   for (const name in interfaces) {
-    console.log(`Checking interface: ${name}`);
     if (name === 'eth0' || name === 'wlan0') {
-      console.log(`Interface ${name} matches criteria`);
       for (const iface of interfaces[name]) {
-        console.log(`  Interface details:`, iface);
         if (iface.family === 'IPv4' && !iface.internal) {
-          console.log(`  Found valid IP: ${iface.address}`);
           return iface.address;
         }
       }
