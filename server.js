@@ -26,20 +26,25 @@ const MJPEG_STREAMER_WWW_PATH = '/usr/local/share/mjpg-streamer/www/'; // Common
 // If you compiled it in your home directory, it might be something like:
 // const MJPEG_STREAMER_WWW_PATH = '/home/pi/mjpg-streamer/mjpg-streamer-experimental/www/';
 
-// Function to get the server's local IP address
 function getServerIpAddress() {
   const interfaces = os.networkInterfaces();
+  console.log('Available interfaces:', Object.keys(interfaces));
+
   for (const name in interfaces) {
+    console.log(`Checking interface: ${name}`);
     if (name === 'eth0' || name === 'wlan0') {
+      console.log(`Interface ${name} matches criteria`);
       for (const iface of interfaces[name]) {
-        // Filter out internal (loopback) and non-IPv4 addresses
+        console.log(`  Interface details:`, iface);
         if (iface.family === 'IPv4' && !iface.internal) {
+          console.log(`  Found valid IP: ${iface.address}`);
           return iface.address;
         }
       }
     }
   }
-  return 'localhost'; // Fallback if no external IP is found
+  console.log('No valid interface found, returning localhost');
+  return 'localhost';
 }
 
 // Helper function to format time (seconds to HH:MM:SS)
