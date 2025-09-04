@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const os = require('os'); // Import the 'os' module
 const CameraService = require('./services/cameraService');
 const ConfigService = require('./services/configService');
+const moment = require('moment-timezone'); // Add at the top
 
 const app = express();
 const server = http.createServer(app);
@@ -939,6 +940,43 @@ async function initializeApp() {
 
     process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+    // ============================================================================
+    // 🆕 TIMELAPSE SCHEDULING BY CLOCK
+    function scheduleTimelapseByClock(cameraService, config) {
+      setInterval(() => {
+        const now = moment().tz('America/Denver');
+        const hour = now.hour();
+        const minute = now.minute();
+
+        // Start at 6:00am
+        if (
+          hour === 6 &&
+          minute === 0 &&
+          !cameraService.getStatus().isCapturing
+        ) {
+          cameraService.startTimelapse(
+            config,
+            null, // onImageCaptured
+            null // onError
+          );
+          console.log('Timelapse started by clock trigger');
+        }
+
+        // Stop at 3:00pm
+        if (
+          hour === 15 &&
+          minute === 0 &&
+          cameraService.getStatus().isCapturing
+        ) {
+          cameraService.stopTimelapse();
+          console.log('Timelapse stopped by clock trigger');
+        }
+      }, 60 * 1000); // Check every minute
+    }
+
+    // Schedule timelapse by clock after camera service is initialized
+    scheduleTimelapseByClock(cameraService, currentConfig);
   } catch (error) {
     console.error('Failed to initialize application:', error);
     process.exit(1);
