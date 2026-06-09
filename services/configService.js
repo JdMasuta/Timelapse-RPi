@@ -51,8 +51,8 @@ class ConfigService {
       streamFps: [5, 10, 15, 20, 25, 30],
       streamQuality: ["low", "medium", "high"],
       videoFps: [12, 15, 20, 24, 25, 30, 48, 60],
-      videoQuality: ["low", "medium", "high", "ultra"],
-      videoCodec: ["h264", "h265", "vp9"],
+      videoQuality: ["low", "medium", "high"],
+      videoCodec: ["h264", "h265"],
       videoBitrate: ["1M", "2M", "5M", "10M", "20M"],
       rotation: [0, 90, 180, 270],
     };
