@@ -1,109 +1,151 @@
 #!/bin/bash
-# Raspberry Pi Installation Script for Timelapse2
-# Run with: bash install-rpi.sh
+# Updated Raspberry Pi Installation Script for Timelapse2
 
+set -e  # Exit on error
 echo "🍓 Timelapse2 Raspberry Pi Installation Script"
 echo "=============================================="
 
-# Check if running on Raspberry Pi
+# Check for Raspberry Pi
 if ! grep -q "Raspberry Pi" /proc/cpuinfo 2>/dev/null; then
-    echo "⚠️  Warning: This script is optimized for Raspberry Pi"
-    echo "   It should work on other Unix systems but may need adjustments"
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
+    echo "⚠️  Not running on Raspberry Pi. Continue anyway? (y/N): "
+    read -r CONTINUE
+    [[ ! $CONTINUE =~ ^[Yy]$ ]] && exit 1
 fi
 
-# Update system packages
+# Ensure we have network connection
+ping -c 1 google.com &>/dev/null || {
+    echo "❌ No internet connection. Please connect before continuing."
+    exit 1
+}
+
+# Update packages
 echo "📦 Updating system packages..."
 sudo apt update && sudo apt upgrade -y
 
-# Install Node.js if not present
-if ! command -v node &> /dev/null; then
-    echo "📦 Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-    sudo apt-get install -y nodejs
-else
-    echo "✅ Node.js already installed: $(node --version)"
+# Check and install correct Node.js version
+NODE_OK=false
+if command -v node &> /dev/null; then
+    NODE_VERSION=$(node --version | sed 's/v//')
+    NODE_MAJOR=${NODE_VERSION%%.*}
+    if (( NODE_MAJOR >= 22 )); then
+        echo "✅ Node.js $NODE_VERSION already installed"
+        NODE_OK=true
+    else
+        echo "⚠️  Installed Node.js is too old. Installing v22..."
+    fi
 fi
 
-# Install additional dependencies
+if [ "$NODE_OK" = false ]; then
+    echo "📦 Installing Node.js v22 via nvm..."
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 22 || {
+        echo "❌ Node.js install failed. Please install manually."
+        exit 1
+    }
+fi
+echo "✅ Node.js installed successfully"
+
+# Install dependencies
 echo "📦 Installing system dependencies..."
-sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++
+sudo apt install -y git libcamera-apps fswebcam cmake libjpeg-dev gcc g++ ffmpeg
 
-# Install/Build MJPG-Streamer
-echo "🎥 Installing MJPG-Streamer..."
-if [ ! -d "/tmp/mjpg-streamer" ]; then
-    cd /tmp
-    git clone https://github.com/jacksonliam/mjpg-streamer.git
-    cd mjpg-streamer/mjpg-streamer-experimental
-    make
-    sudo make install
-    echo "✅ MJPG-Streamer installed successfully"
+# Clone or update MJPG-Streamer
+echo "🎥 Preparing MJPG-Streamer..."
+cd /tmp/
+if [ -d "mjpg-streamer" ]; then
+    echo "🔁 Updating existing MJPG-Streamer repo..."
+    cd mjpg-streamer
+    git pull
 else
-    echo "✅ MJPG-Streamer source already exists, skipping download"
+    echo "⬇️ Cloning MJPG-Streamer repo..."
+    git clone https://github.com/jacksonliam/mjpg-streamer.git
+    cd mjpg-streamer
 fi
 
-# Install project dependencies
-echo "📦 Installing project dependencies..."
-cd "$OLDPWD"  # Return to original directory
-npm install
+cd mjpg-streamer-experimental
 
-# Create necessary directories
-echo "📁 Creating directories..."
+# Build only if binary not already present
+if [ ! -f "/usr/local/bin/mjpg_streamer" ]; then
+    echo "⚙️  Building MJPG-Streamer..."
+    make && sudo make install
+    echo "✅ MJPG-Streamer installed"
+else
+    echo "✅ MJPG-Streamer already built and installed"
+fi
+
+# Return to project directory
+cd /home/access/Timelapse-RPi || {
+    echo "❌ Timelapse-RPi directory not found in previous working dir"
+    exit 1
+}
+
+# Check required files
+if [ ! -f "server.js" ]; then
+    echo "❌ server.js not found. Please make sure you're in the project root."
+    exit 1
+fi
+
+if [ ! -f ".env" ]; then
+    echo "⚙️  Setting up .env..."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        echo "✅ .env file created from example"
+    else
+        echo "❌ .env.example not found. Please provide one before proceeding."
+        exit 1
+    fi
+else
+    echo "✅ .env file exists"
+fi
+
+# NPM dependencies
+echo "📦 Installing Node dependencies..."
+npm install || {
+    echo "❌ npm install failed. Check for errors and try again."
+    exit 1
+}
+
+# Create needed folders
+echo "📁 Creating captures and logs directories..."
 mkdir -p captures logs
 
-# Copy environment file
-if [ ! -f .env ]; then
-    echo "⚙️  Setting up environment configuration..."
-    cp .env.example .env
-    echo "✅ Created .env file - please configure it for your setup"
-else
-    echo "✅ .env file already exists"
-fi
+# Camera setup
+echo "🎥 Adding user to video group..."
+sudo usermod -a -G video "$USER"
 
-# Set up camera permissions
-echo "🎥 Setting up camera permissions..."
-sudo usermod -a -G video $USER
-
-# Check camera availability
-echo "🔍 Checking camera and streaming availability..."
+echo "🔍 Checking camera availability..."
 if [ -e /dev/video0 ]; then
-    echo "✅ USB camera detected at /dev/video0"
+    echo "✅ USB camera detected"
 elif command -v libcamera-still &> /dev/null; then
-    echo "✅ libcamera tools available for RPi Camera Module"
+    echo "✅ libcamera tools available"
 else
-    echo "⚠️  No camera detected. Please:"
-    echo "   - Connect a USB camera, or"
-    echo "   - Enable RPi Camera Module: sudo raspi-config"
+    echo "⚠️  No camera detected. Run: sudo raspi-config to enable or plug in a camera."
 fi
 
-# Test MJPG-Streamer installation
+# Verify MJPG-Streamer
 if command -v mjpg_streamer &> /dev/null; then
-    echo "✅ MJPG-Streamer installed successfully"
-    echo "   Stream will be available at: http://$(hostname -I | awk '{print $1}'):8080"
+    echo "✅ MJPG-Streamer installed"
 else
-    echo "⚠️  MJPG-Streamer installation may have failed"
+    echo "⚠️  MJPG-Streamer not found. Check installation."
 fi
 
-# Offer to install as service
-echo ""
-read -p "🚀 Install Timelapse2 as system service (auto-start on boot)? (y/N): " -n 1 -r
+# Offer to create systemd service for Timelapse2
+read -p "🚀 Install Timelapse-RPi as system service? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "📋 Creating Timelapse2 systemd service..."
-    sudo tee /etc/systemd/system/timelapse2.service > /dev/null <<EOF
+    echo "📋 Creating systemd service..."
+    sudo tee /etc/systemd/system/timelapse.service > /dev/null <<EOF
 [Unit]
-Description=Timelapse2 Service
+Description=Timelapse-RPi Service
 After=network.target
 
 [Service]
 Type=simple
 User=$USER
 WorkingDirectory=$PWD
-ExecStart=/usr/bin/node server.js
+ExecStart=$(which node) server.js
 Restart=on-failure
 Environment=NODE_ENV=production
 
@@ -112,75 +154,23 @@ WantedBy=multi-user.target
 EOF
 
     sudo systemctl daemon-reload
-    sudo systemctl enable timelapse2.service
-    echo "✅ Timelapse2 service created and enabled"
-    echo "   Start with: sudo systemctl start timelapse2"
-    echo "   Stop with: sudo systemctl stop timelapse2"
-    echo "   Status: sudo systemctl status timelapse2"
-fi
+    sudo systemctl enable timelapse.service
 
-# Offer to install MJPG-Streamer as service
-echo ""
-read -p "📹 Install MJPG-Streamer as system service (auto-start streaming)? (y/N): " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    echo "🎥 Setting up MJPG-Streamer service..."
-    echo "Choose camera type:"
-    echo "1) Raspberry Pi Camera Module"  
-    echo "2) USB Camera"
-    read -p "Enter choice (1 or 2): " -n 1 -r
-    echo
-    
-    if [[ $REPLY == "1" ]]; then
-        MJPG_EXEC_START='/usr/local/bin/mjpg_streamer -i "input_raspicam.so -x 1280 -y 720 -fps 15 -ex auto" -o "output_http.so -w /usr/local/share/mjpg-streamer/www -p 8080"'
-    elif [[ $REPLY == "2" ]]; then
-        MJPG_EXEC_START='/usr/local/bin/mjpg_streamer -i "input_uvc.so -d /dev/video0 -r 1280x720 -f 15" -o "output_http.so -w /usr/local/share/mjpg-streamer/www -p 8080"'
+    if systemctl list-unit-files | grep -q timelapse.service; then
+        echo "✅ timelapse.service created and enabled"
     else
-        echo "❌ Invalid choice, skipping MJPG-Streamer service setup"
-        MJPG_EXEC_START=""
-    fi
-    
-    if [ -n "$MJPG_EXEC_START" ]; then
-        sudo tee /etc/systemd/system/mjpg-streamer.service > /dev/null <<EOF
-[Unit]
-Description=MJPG-Streamer for Timelapse2
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-Group=video
-WorkingDirectory=/usr/local/bin
-Environment=LD_LIBRARY_PATH=/usr/local/lib
-ExecStart=$MJPG_EXEC_START
-ExecStop=/bin/kill -TERM \$MAINPID
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-        sudo systemctl daemon-reload
-        sudo systemctl enable mjpg-streamer.service
-        echo "✅ MJPG-Streamer service created and enabled"
-        echo "   Start with: sudo systemctl start mjpg-streamer"
-        echo "   Stop with: sudo systemctl stop mjpg-streamer"
-        echo "   Status: sudo systemctl status mjpg-streamer"
+        echo "❌ Failed to create timelapse.service. Check permissions or syntax."
     fi
 fi
+
+# Show access info
+LOCAL_IP=$(hostname -I | awk '{print $1}')
+HOSTNAME=$(hostname)
 
 echo ""
 echo "🎉 Installation complete!"
 echo ""
-echo "Next steps:"
-echo "1. Configure .env file with your settings"
-echo "2. Test camera: libcamera-still -o test.jpg (RPi) or fswebcam test.jpg (USB)"
-echo "3. Test MJPG-Streamer manually:"
-echo "   For RPi Camera: mjpg_streamer -i 'input_raspicam.so -x 1280 -y 720' -o 'output_http.so -p 8080'"
-echo "   For USB Camera: mjpg_streamer -i 'input_uvc.so -d /dev/video0 -r 1280x720' -o 'output_http.so -p 8080'"
-echo "4. Start development server: npm run dev"
-echo "5. Access web interface: http://$(hostname -I | awk '{print $1}'):3000"
-echo "6. Access camera stream: http://$(hostname -I | awk '{print $1}'):8080/stream.html"
+echo "➡️  Web interface: http://$LOCAL_IP:3000 or http://$HOSTNAME:3000"
+echo "➡️  Camera stream: http://$LOCAL_IP:8080/stream.html"
 echo ""
-echo "📖 See README.md for detailed configuration options"
+echo "📖 See README.md for more details"
