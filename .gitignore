@@ -54,11 +54,14 @@ typings/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variables file
+# dotenv environment variables file (optional local overrides)
 .env
 .env.test
 .env.production
 .env.local
+
+# Runtime settings instance (created from config/settings.default.json on first run)
+config/settings.json
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

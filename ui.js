@@ -486,15 +486,13 @@ document.addEventListener("DOMContentLoaded", () => {
   );
 });
 
-// Listen for successful configuration saves to clear change indicators
+// Listen for successful configuration saves to clear change indicators.
+// (extendedConfigUpdate has a single listener in api.js, which also calls
+// showConfigurationSummary defined in this file.)
 if (typeof socket !== "undefined") {
   socket.on("configSaved", () => {
     clearChangeIndicators();
     showNotification("Configuration saved successfully!", "success");
-  });
-
-  socket.on("extendedConfigUpdate", (config) => {
-    showConfigurationSummary(config);
   });
 }
 

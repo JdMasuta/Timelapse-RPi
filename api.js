@@ -70,8 +70,12 @@ socket.on("configUpdate", (config) => {
 socket.on("extendedConfigUpdate", (extendedConfig) => {
   console.log("Received extended config update:", extendedConfig);
   updateUIWithExtendedConfig(extendedConfig);
+  if (typeof showConfigurationSummary === "function") {
+    showConfigurationSummary(extendedConfig);
+  }
 });
 
+// Single systemInfoUpdate listener (also forwards video processing status).
 socket.on("systemInfoUpdate", (data) => {
   document.getElementById("memoryUsage").textContent = data.memoryUsage;
   document.getElementById("systemUptime").textContent = data.systemUptime;
@@ -82,6 +86,10 @@ socket.on("systemInfoUpdate", (data) => {
     data.streamStatus === "Streaming"
       ? "stream-status connected"
       : "stream-status disconnected";
+
+  if (data.videoStatus && typeof updateVideoStatus === "function") {
+    updateVideoStatus(data.videoStatus);
+  }
 });
 
 // MODIFIED: Now receives a stream URL instead of Base64 frames
@@ -107,26 +115,7 @@ socket.on("liveStreamUrl", (streamUrl) => {
   }
 });
 
-socket.on("videoGenerationStatus", (data) => {
-  const videoProgress = document.getElementById("videoProgress");
-  const videoProgressFill = document.getElementById("videoProgressFill");
-  const videoStatusText = document.getElementById("videoStatus");
-  const generateBtn = document.getElementById("generateBtn");
-
-  if (data.status === "in-progress") {
-    videoProgress.style.display = "block";
-    videoProgressFill.style.width = `${data.progress || 0}%`;
-    videoStatusText.textContent = data.message;
-    generateBtn.disabled = true;
-  } else if (data.status === "complete") {
-    videoProgressFill.style.width = "100%";
-    videoStatusText.textContent = data.message;
-    generateBtn.disabled = false;
-    setTimeout(() => {
-      videoProgress.style.display = "none"; // Hide progress after a short delay
-    }, 3000);
-  }
-});
+// Note: videoGenerationStatus is handled by a single, richer listener in app.js.
 
 socket.on("notification", (data) => {
   showNotification(data.message, data.type);

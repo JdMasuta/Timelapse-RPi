@@ -160,14 +160,6 @@ socket.on("videoListUpdate", (videos) => {
   updateVideoList(videos);
 });
 
-// Enhanced system info updates (modify existing listener)
-socket.on("systemInfoUpdate", (data) => {
-  document.getElementById("memoryUsage").textContent = data.memoryUsage;
-  document.getElementById("systemUptime").textContent = data.systemUptime;
-  document.getElementById("streamStatus").textContent = data.streamStatus;
-
-  // Update video status if available
-  if (data.videoStatus) {
-    updateVideoStatus(data.videoStatus);
-  }
-});
+// Note: systemInfoUpdate is handled in api.js (single listener), which also forwards
+// videoStatus to updateVideoStatus(). videoGenerationStatus is handled here (this file)
+// as the single, richer listener.

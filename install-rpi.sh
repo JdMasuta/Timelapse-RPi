@@ -2,7 +2,11 @@
 # Updated Raspberry Pi Installation Script for Timelapse2
 
 set -e  # Exit on error
-echo "🍓 Timelapse2 Raspberry Pi Installation Script"
+
+# Resolve the project directory (where this script lives) before any 'cd'.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "🍓 Timelapse-RPi Raspberry Pi Installation Script"
 echo "=============================================="
 
 # Check for Raspberry Pi
@@ -75,9 +79,9 @@ else
     echo "✅ MJPG-Streamer already built and installed"
 fi
 
-# Return to project directory
-cd /home/access/Timelapse-RPi || {
-    echo "❌ Timelapse-RPi directory not found in previous working dir"
+# Return to project directory (where this script lives)
+cd "$SCRIPT_DIR" || {
+    echo "❌ Could not change to project directory: $SCRIPT_DIR"
     exit 1
 }
 
@@ -87,18 +91,9 @@ if [ ! -f "server.js" ]; then
     exit 1
 fi
 
-if [ ! -f ".env" ]; then
-    echo "⚙️  Setting up .env..."
-    if [ -f ".env.example" ]; then
-        cp .env.example .env
-        echo "✅ .env file created from example"
-    else
-        echo "❌ .env.example not found. Please provide one before proceeding."
-        exit 1
-    fi
-else
-    echo "✅ .env file exists"
-fi
+# Configuration: config/settings.json is created automatically from
+# config/settings.default.json on first run. Optionally override values with a .env file.
+echo "⚙️  Configuration is managed via config/settings.json (auto-created on first run)."
 
 # NPM dependencies
 echo "📦 Installing Node dependencies..."
@@ -108,8 +103,8 @@ npm install || {
 }
 
 # Create needed folders
-echo "📁 Creating captures and logs directories..."
-mkdir -p captures logs
+echo "📁 Creating captures, videos, logs and temp directories..."
+mkdir -p captures videos logs temp
 
 # Camera setup
 echo "🎥 Adding user to video group..."

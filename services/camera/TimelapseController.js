@@ -1,7 +1,6 @@
 // services/camera/TimelapseController.js - Timelapse management logic
 
 const Logger = require("./Logger");
-const { TIMELAPSE_CONFIG } = require("./constants");
 
 class TimelapseController {
   constructor(captureController) {
@@ -56,24 +55,14 @@ class TimelapseController {
 
       const config = operation.config;
 
-      // Store actual stream state at timelapse start
-      const streamWasActiveAtStart = streamController.isActive();
-      const streamConfigAtStart = streamController.getCurrentConfig();
-
       Logger.info("TimelapseController", "Timelapse configuration", {
         captureInterval: config.captureInterval,
         imageQuality: config.imageQuality,
-        streamWasActiveAtStart,
-        hasStreamConfig: !!streamConfigAtStart,
+        streamActive: streamController.isActive(),
       });
 
       // Start the capture loop
-      await this._startCaptureLoop(
-        config,
-        streamController,
-        streamWasActiveAtStart,
-        streamConfigAtStart
-      );
+      await this._startCaptureLoop(config, streamController);
 
       return true;
     } catch (error) {
@@ -124,14 +113,10 @@ class TimelapseController {
   }
 
   /**
-   * Start the capture loop
+   * Start the capture loop. Stream pause/resume around each capture is delegated to
+   * CaptureController.captureWithStreamPause (single implementation of that logic).
    */
-  async _startCaptureLoop(
-    config,
-    streamController,
-    streamWasActiveAtStart,
-    streamConfigAtStart
-  ) {
+  async _startCaptureLoop(config, streamController) {
     const loop = async () => {
       if (!this.isCapturing) {
         Logger.info(
@@ -142,17 +127,11 @@ class TimelapseController {
       }
 
       try {
-        // Pause stream before capture
-        if (streamWasActiveAtStart && streamConfigAtStart) {
-          Logger.debug("TimelapseController", "Pausing stream for capture");
-          streamController.stop();
-          await new Promise((res) =>
-            setTimeout(res, TIMELAPSE_CONFIG.streamPauseDelay)
-          );
-        }
-
-        // Capture image
-        const result = await this.captureController.captureImage(config);
+        const result = await this.captureController.captureWithStreamPause(
+          config,
+          streamController,
+          (event, message) => this.currentOperation?.notify(event, message)
+        );
         this.imageCount++;
 
         Logger.info("TimelapseController", "Timelapse image captured", {
@@ -160,8 +139,6 @@ class TimelapseController {
           filename: result.filename,
         });
 
-        // Notify callbacks
-        this.currentOperation?.notify("image-captured", result.filename);
         this.currentOperation?.imageCaptured({
           imageCount: this.imageCount,
           sessionTime: this.getSessionTime(),
@@ -173,14 +150,6 @@ class TimelapseController {
           error: err.message,
         });
         this.currentOperation?.error(err);
-      }
-
-      // Resume stream after capture
-      if (this.isCapturing && streamWasActiveAtStart && streamConfigAtStart) {
-        Logger.debug("TimelapseController", "Resuming stream after capture");
-        await streamController.start(streamConfigAtStart, (event, message) => {
-          this.currentOperation?.notify(event, message);
-        });
       }
 
       // Schedule next capture

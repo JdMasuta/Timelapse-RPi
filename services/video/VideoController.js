@@ -55,7 +55,8 @@ class VideoController {
     });
 
     this.ensureDirectories();
-    this.setupGracefulShutdown();
+    // Note: process shutdown is owned solely by server.js, which calls cleanup() during
+    // its graceful shutdown. This controller no longer registers its own signal handlers.
   }
 
   async ensureDirectories() {
@@ -80,26 +81,6 @@ class VideoController {
     }
   }
 
-  setupGracefulShutdown() {
-    const shutdown = async (signal) => {
-      Logger.info("VideoController", "Graceful shutdown initiated", { signal });
-
-      if (this.currentJob) {
-        Logger.info(
-          "VideoController",
-          "Cancelling current job during shutdown"
-        );
-        await this.cancelVideoCreation();
-      }
-
-      this.processManager.cleanup();
-      Logger.info("VideoController", "Shutdown complete");
-      process.exit(0);
-    };
-
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT", () => shutdown("SIGINT"));
-  }
 
   /**
    * Create video from folder of images - Production Ready
@@ -163,12 +144,13 @@ class VideoController {
         options: validatedOptions,
       };
 
-      // Scan and analyze images, and create symlinks
+      // Scan and analyze images, and build the FFmpeg concat list
       const imageData = await this.scanAndValidateImages(
         validatedFolder,
-        correlationId
+        correlationId,
+        validatedOptions.fps
       );
-      tempSymlinkDir = imageData.tempSymlinkDir; // Store for cleanup
+      tempSymlinkDir = imageData.concatListPath; // temp artifact to clean up
 
       // Generate secure output path
       const outputInfo = await this.generateOutputPath(
@@ -179,7 +161,7 @@ class VideoController {
 
       // Build secure FFmpeg arguments
       const ffmpegArgs = this.buildSecureFFmpegArgs(
-        tempSymlinkDir, // Use the temporary symlink directory
+        imageData.concatListPath, // concat demuxer list of ordered frames
         outputInfo.outputPath,
         validatedOptions,
         imageData
@@ -260,20 +242,20 @@ class VideoController {
       this.currentJob = null;
       this.mutex.release();
 
-      // Cleanup temporary symlink directory
+      // Cleanup temporary concat list file
       if (tempSymlinkDir) {
-        await this.cleanupSymlinks(tempSymlinkDir, correlationId);
+        await this.cleanupConcatList(tempSymlinkDir, correlationId);
       }
     }
   }
 
-  async scanAndValidateImages(inputFolder, correlationId) {
+  async scanAndValidateImages(inputFolder, correlationId, fps = 30) {
     Logger.debug("VideoController", "Scanning images", {
       correlationId,
       inputFolder,
     });
 
-    let tempSymlinkDir = null; // Initialize to null
+    let concatListPath = null;
 
     try {
       const files = await fs.readdir(inputFolder);
@@ -291,26 +273,30 @@ class VideoController {
         );
       }
 
-      // Parse timestamps and validate
+      // Manifest is the source of truth for frame timestamps; fall back to parsing
+      // the canonical filename pattern for images captured before the manifest existed.
+      const manifest = await this.readManifest(inputFolder, correlationId);
+
       const images = [];
       for (const filename of imageFiles) {
-        const timestamp = this.parseTimestamp(filename);
+        let timestamp = null;
+        if (manifest[filename] && manifest[filename].timestamp) {
+          const d = new Date(manifest[filename].timestamp);
+          if (!isNaN(d.getTime())) timestamp = d;
+        }
+        if (!timestamp) timestamp = this.parseTimestamp(filename);
+
         if (timestamp) {
-          // Ensure `path` is set correctly here
           images.push({
             filename,
             timestamp,
             path: path.join(inputFolder, filename),
           });
         } else {
-          Logger.warn(
-            "VideoController",
-            "Skipping file with invalid timestamp",
-            {
-              correlationId,
-              filename,
-            }
-          );
+          Logger.warn("VideoController", "Skipping file with no known timestamp", {
+            correlationId,
+            filename,
+          });
         }
       }
 
@@ -324,15 +310,6 @@ class VideoController {
 
       // Sort chronologically
       images.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-      // Log the images array to debug the 'path' property
-      Logger.debug("VideoController", "Images array before symlink creation:", {
-        correlationId,
-        sampleImages: images
-          .slice(0, 5)
-          .map((img) => ({ filename: img.filename, path: img.path })), // Log a sample
-        totalImages: images.length,
-      });
 
       const startTime = images[0].timestamp;
       const endTime = images[images.length - 1].timestamp;
@@ -349,73 +326,25 @@ class VideoController {
         );
       }
 
-      // --- Create a temporary directory for symlinks ---
-      const tempDirPrefix = `ffmpeg_input_${correlationId}_`;
-      tempSymlinkDir = await fs.mkdtemp(
-        path.join(this.config.get("tempDir"), tempDirPrefix)
+      // Build an FFmpeg concat-demuxer list (replaces the old temp-symlink tree).
+      // Each frame is shown for 1/fps seconds; the last frame is repeated so it renders.
+      const frameDuration = (1 / (fps || 30)).toFixed(6);
+      const lines = ["ffconcat version 1.0"];
+      for (const image of images) {
+        lines.push(`file '${image.path.replace(/'/g, "'\\''")}'`);
+        lines.push(`duration ${frameDuration}`);
+      }
+      lines.push(`file '${images[images.length - 1].path.replace(/'/g, "'\\''")}'`);
+
+      concatListPath = path.join(
+        this.config.get("tempDir"),
+        `ffmpeg_concat_${correlationId}.txt`
       );
-      Logger.info("VideoController", "Created temporary symlink directory", {
+      await fs.writeFile(concatListPath, lines.join("\n") + "\n");
+      Logger.info("VideoController", "Concat list created", {
         correlationId,
-        tempSymlinkDir,
-      });
-
-      // --- Create sequential symlinks ---
-      const symlinkPromises = images.map(async (image, index) => {
-        const paddedIndex = String(index).padStart(3, "0"); // e.g., 000, 001, 002
-        const symlinkName = `frame_${paddedIndex}.jpg`;
-        const symlinkPath = path.join(tempSymlinkDir, symlinkName);
-        const targetPath = image.path; // Absolute path to original image
-
-        if (!targetPath || typeof targetPath !== "string") {
-          Logger.error("VideoController", "Invalid target path for symlink", {
-            correlationId,
-            filename: image.filename,
-            targetPath: targetPath, // Log the problematic path
-            imageObject: image, // Log the whole image object for deeper inspection
-          });
-          throw new VideoError(
-            `Invalid source path for symlink: ${image.filename}`,
-            "SYMLINK_INVALID_SOURCE",
-            { filename: image.filename }
-          );
-        }
-
-        try {
-          // Validate that the source file exists before creating a symlink
-          await fs.access(targetPath);
-          // Use 'file' type for symlink to regular files
-          await fs.symlink(targetPath, symlinkPath, "file");
-          Logger.debug("VideoController", "Symlink created", {
-            correlationId,
-            source: targetPath,
-            destination: symlinkPath,
-          });
-        } catch (symlinkError) {
-          Logger.error("VideoController", "Failed to create symlink", {
-            correlationId,
-            source: targetPath,
-            destination: symlinkPath,
-            error: symlinkError.message,
-            errorCode: symlinkError.code, // Log specific error code (e.g., ENOENT if file not found)
-          });
-          // Rethrow to fail the video creation process if symlink fails
-          throw new VideoError(
-            `Failed to create symlink for ${image.filename}`,
-            "SYMLINK_ERROR",
-            {
-              filename: image.filename,
-              error: symlinkError.message,
-              errorCode: symlinkError.code,
-            }
-          );
-        }
-      });
-
-      await Promise.all(symlinkPromises);
-      Logger.info("VideoController", "Sequential symlinks created", {
-        correlationId,
+        concatListPath,
         count: images.length,
-        tempSymlinkDir,
       });
 
       const result = {
@@ -424,7 +353,7 @@ class VideoController {
         endTime,
         durationSeconds,
         count: images.length,
-        tempSymlinkDir, // Add the temporary directory path to the result
+        concatListPath,
       };
 
       Logger.info("VideoController", "Images scanned and validated", {
@@ -437,21 +366,34 @@ class VideoController {
 
       return result;
     } catch (error) {
-      Logger.error(
-        "VideoController",
-        "Error scanning images or creating symlinks",
-        {
-          correlationId,
-          error: error.message,
-          inputFolder,
-          errorCode: error.code,
-        }
-      );
-      // Ensure cleanup of partially created symlink directory if an error occurs early
-      if (tempSymlinkDir) {
-        await this.cleanupSymlinks(tempSymlinkDir, correlationId);
+      Logger.error("VideoController", "Error scanning images", {
+        correlationId,
+        error: error.message,
+        inputFolder,
+        errorCode: error.code,
+      });
+      if (concatListPath) {
+        await this.cleanupConcatList(concatListPath, correlationId);
       }
       throw error;
+    }
+  }
+
+  /**
+   * Read the capture manifest (captures/manifest.json) if present.
+   * Returns an object mapping filename -> { timestamp }. Missing/corrupt -> {}.
+   */
+  async readManifest(inputFolder, correlationId) {
+    const manifestPath = path.join(inputFolder, "manifest.json");
+    try {
+      const raw = await fs.readFile(manifestPath, "utf8");
+      return JSON.parse(raw);
+    } catch (error) {
+      Logger.debug("VideoController", "No usable manifest; using filename parsing", {
+        correlationId,
+        error: error.message,
+      });
+      return {};
     }
   }
 
@@ -519,19 +461,17 @@ class VideoController {
     };
   }
 
-  buildSecureFFmpegArgs(tempSymlinkDir, outputPath, options, imageData) {
+  buildSecureFFmpegArgs(concatListPath, outputPath, options, imageData) {
     // Build FFmpeg arguments array (NO shell execution, NO string interpolation)
     const args = [];
 
     // Overwrite output file
     args.push("-y");
 
-    // Input framerate
-    args.push("-framerate", "1");
-
-    // Use sequential image pattern
-    // FFmpeg will look for files like frame_000.jpg, frame_001.jpg, etc.
-    args.push("-i", path.join(tempSymlinkDir, "frame_%03d.jpg"));
+    // Read ordered frames from the concat-demuxer list (-safe 0 allows absolute paths).
+    args.push("-f", "concat");
+    args.push("-safe", "0");
+    args.push("-i", concatListPath);
 
     // Video codec
     const codecMap = {
@@ -581,7 +521,7 @@ class VideoController {
       codec: options.codec,
       quality: options.quality,
       fps: options.fps,
-      inputPath: path.join(tempSymlinkDir, "frame_%03d.jpg"), // Log the actual input path
+      concatListPath,
     });
 
     return args;
@@ -815,47 +755,33 @@ class VideoController {
   }
 
   /**
-   * Cleans up the temporary directory containing symlinks.
-   * @param {string} tempDir - The path to the temporary directory.
+   * Removes the temporary FFmpeg concat list file.
+   * @param {string} listPath - The path to the concat list file.
    * @param {string} correlationId - The correlation ID for logging.
    */
-  async cleanupSymlinks(tempDir, correlationId) {
-    Logger.info(
-      "VideoController",
-      "Initiating cleanup of temporary symlink directory",
-      {
-        correlationId,
-        tempDir,
-      }
-    );
+  async cleanupConcatList(listPath, correlationId) {
+    Logger.info("VideoController", "Cleaning up concat list", {
+      correlationId,
+      listPath,
+    });
     try {
-      // Check if the directory exists before attempting to remove it
-      await fs.access(tempDir);
-      await fs.rm(tempDir, { recursive: true, force: true });
-      Logger.info("VideoController", "Temporary symlink directory cleaned up", {
+      await fs.rm(listPath, { force: true });
+      Logger.info("VideoController", "Concat list cleaned up", {
         correlationId,
-        tempDir,
+        listPath,
       });
     } catch (error) {
       if (error.code === "ENOENT") {
-        Logger.warn(
-          "VideoController",
-          "Temporary symlink directory not found during cleanup, skipping",
-          {
-            correlationId,
-            tempDir,
-          }
-        );
+        Logger.warn("VideoController", "Concat list not found during cleanup", {
+          correlationId,
+          listPath,
+        });
       } else {
-        Logger.error(
-          "VideoController",
-          "Error cleaning up temporary symlink directory",
-          {
-            correlationId,
-            tempDir,
-            error: error.message,
-          }
-        );
+        Logger.error("VideoController", "Error cleaning up concat list", {
+          correlationId,
+          listPath,
+          error: error.message,
+        });
       }
     }
   }
