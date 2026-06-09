@@ -2,6 +2,7 @@
 
 const { spawn } = require("child_process");
 const Logger = require("./Logger");
+const { settings } = require("../../config/load");
 const { RESOLUTIONS, DEFAULT_PATHS, STREAM_CONFIG } = require("./constants");
 
 class StreamController {
@@ -10,6 +11,8 @@ class StreamController {
     this.currentStreamConfig = null;
     this.mjpegStreamerPath = DEFAULT_PATHS.mjpegStreamerPath;
     this.mjpegStreamerWwwPath = DEFAULT_PATHS.mjpegStreamerWwwPath;
+    this.device = settings.stream.device;
+    this.inputPlugin = settings.stream.inputPlugin;
 
     Logger.info("StreamController", "Stream controller initialized", {
       mjpegStreamerPath: this.mjpegStreamerPath,
@@ -90,7 +93,7 @@ class StreamController {
 
       const command = [
         "-i",
-        `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,
+        `${this.inputPlugin} -d ${this.device} -r ${resolution} -f ${config.streamFps}`,
         "-o",
         `output_http.so -w ${this.mjpegStreamerWwwPath} -p ${STREAM_CONFIG.port}`,
       ];

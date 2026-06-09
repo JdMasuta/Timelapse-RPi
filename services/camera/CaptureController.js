@@ -5,7 +5,7 @@ const { promisify } = require("util");
 const { exec } = require("child_process");
 const path = require("path");
 const Logger = require("./Logger");
-const { RESOLUTIONS } = require("./constants");
+const { CAPTURE_RESOLUTIONS } = require("./constants");
 
 const execAsync = promisify(exec);
 
@@ -26,7 +26,7 @@ class CaptureController {
    * Get resolution for quality setting
    */
   getResolutionForQuality(quality) {
-    const resolution = RESOLUTIONS[quality] || RESOLUTIONS.medium;
+    const resolution = CAPTURE_RESOLUTIONS[quality] || CAPTURE_RESOLUTIONS.medium;
     Logger.debug("CaptureController", "Resolution determined", {
       quality,
       resolution,

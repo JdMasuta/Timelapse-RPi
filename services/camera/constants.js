@@ -1,4 +1,6 @@
-// services/camera/constants.js - Updated with video constants
+// services/camera/constants.js - values sourced from the single settings file
+
+const { settings } = require("../../config/load");
 
 const OPERATION_PRIORITIES = {
   EMERGENCY_CAPTURE: 100,
@@ -8,21 +10,23 @@ const OPERATION_PRIORITIES = {
   // Note: Video creation is not in this queue - it runs independently
 };
 
-const RESOLUTIONS = {
-  low: "1280x720",
-  medium: "1920x1080",
-  high: "3840x2160",
-};
+// Quality -> resolution tables (single source of truth, in settings.json).
+// Capture and stream intentionally use different scales (capture favors detail,
+// stream favors bandwidth), so each has its own table.
+const STREAM_RESOLUTIONS = settings.resolutions.stream;
+const CAPTURE_RESOLUTIONS = settings.resolutions.capture;
+// Back-compat alias used by StreamController.
+const RESOLUTIONS = STREAM_RESOLUTIONS;
 
 const DEFAULT_PATHS = {
-  mjpegStreamerPath: "/usr/local/bin/mjpg_streamer",
-  mjpegStreamerWwwPath: "/usr/local/share/mjpg-streamer/www/",
-  outputDir: "./captures",
-  videosDir: "./videos", // 🆕 New video output directory
+  mjpegStreamerPath: settings.paths.mjpgStreamerPath,
+  mjpegStreamerWwwPath: settings.paths.mjpgStreamerWww,
+  outputDir: settings.paths.outputDir,
+  videosDir: settings.paths.videosDir,
 };
 
 const STREAM_CONFIG = {
-  port: 8080,
+  port: settings.stream.port,
   readySignal: "o: commands.............: enabled",
   startupTimeout: 5000,
 };
@@ -31,7 +35,6 @@ const TIMELAPSE_CONFIG = {
   streamPauseDelay: 500, // ms to wait after stopping stream before capture
 };
 
-// 🆕 Video-specific constants
 const VIDEO_CONFIG = {
   // Default video creation settings
   defaultFps: 30,
@@ -57,8 +60,10 @@ const VIDEO_CONFIG = {
 module.exports = {
   OPERATION_PRIORITIES,
   RESOLUTIONS,
+  STREAM_RESOLUTIONS,
+  CAPTURE_RESOLUTIONS,
   DEFAULT_PATHS,
   STREAM_CONFIG,
   TIMELAPSE_CONFIG,
-  VIDEO_CONFIG, // 🆕 Export video constants
+  VIDEO_CONFIG,
 };

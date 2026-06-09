@@ -1,9 +1,10 @@
 // server.js - Updated with enhanced video generation capabilities
+// Load configuration first so process.env is populated before any module reads it.
+const { settings } = require("./config/load");
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
 const path = require("path");
-const { spawn } = require("child_process");
 const os = require("os"); // Import the 'os' module
 const CameraService = require("./services/cameraService");
 const ConfigService = require("./services/configService");
@@ -57,6 +58,10 @@ async function initializeApp() {
     const PORT = fullConfig.port;
     const SERVER_IP_ADDRESS = getServerIpAddress();
     console.log(`Node.js server running on: ${SERVER_IP_ADDRESS}:${PORT}`);
+
+    // Single source for the live MJPEG stream URL (port comes from settings).
+    const streamUrl = () =>
+      `http://${SERVER_IP_ADDRESS}:${settings.stream.port}/?action=stream`;
 
     // Serve static files from the current directory
     app.use(express.static(path.join(__dirname)));
@@ -180,10 +185,7 @@ async function initializeApp() {
       if (cameraService.isStreamActive()) {
         socket.emit("streamStatusUpdate", "Streaming");
         // Now using the server's actual IP address
-        socket.emit(
-          "liveStreamUrl",
-          `http://${SERVER_IP_ADDRESS}:8080/?action=stream`
-        );
+        socket.emit("liveStreamUrl", streamUrl());
       } else {
         socket.emit("streamStatusUpdate", "Stopped");
         socket.emit("liveStreamUrl", ""); // Clear URL if not streaming
@@ -268,11 +270,8 @@ async function initializeApp() {
         try {
           console.log("Resetting configuration to defaults...");
 
-          // Generate default .env content
-          const defaultEnvContent = configService.generateDefaultEnvContent();
-          await configService.writeEnvFile(
-            configService.parseEnvContent(defaultEnvContent)
-          );
+          // Reset settings.json back to the shipped defaults.
+          await configService.resetToDefaults();
 
           // Reload configuration
           fullConfig = await configService.loadConfig();
@@ -338,9 +337,8 @@ async function initializeApp() {
                   io.emit("notification", { message, type: "success" });
                 } else if (type === "stream-ready") {
                   // New handler for when stream is actually ready
-                  const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
                   io.emit("streamStatusUpdate", "Streaming");
-                  io.emit("liveStreamUrl", streamUrl);
+                  io.emit("liveStreamUrl", streamUrl());
                   io.emit("notification", { message, type: "success" });
                 } else if (type === "stream-error") {
                   io.emit("streamStatusUpdate", "Stopped");
@@ -413,9 +411,8 @@ async function initializeApp() {
             // Start stream using centralized method
             await cameraService.startStream(currentConfig, (event, message) => {
               if (event === "stream-ready") {
-                const streamUrl = `http://${SERVER_IP_ADDRESS}:8080/?action=stream`;
                 io.emit("streamStatusUpdate", "Streaming");
-                io.emit("liveStreamUrl", streamUrl);
+                io.emit("liveStreamUrl", streamUrl());
                 socket.emit("notification", {
                   message: "Live preview started!",
                   type: "success",

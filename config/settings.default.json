@@ -1,0 +1,56 @@
+{
+  "server": {
+    "port": 3000,
+    "host": "0.0.0.0"
+  },
+  "paths": {
+    "outputDir": "./captures",
+    "videosDir": "./videos",
+    "tempDir": "./temp",
+    "ffmpegPath": "ffmpeg",
+    "mjpgStreamerPath": "/usr/local/bin/mjpg_streamer",
+    "mjpgStreamerWww": "/usr/local/share/mjpg-streamer/www"
+  },
+  "stream": {
+    "port": 8080,
+    "fps": 15,
+    "quality": "medium",
+    "device": "/dev/video0",
+    "inputPlugin": "input_uvc.so"
+  },
+  "capture": {
+    "intervalSeconds": 5,
+    "imageQuality": "high",
+    "rotation": 0,
+    "flipHorizontal": false,
+    "flipVertical": false
+  },
+  "video": {
+    "fps": 30,
+    "quality": "medium",
+    "codec": "h264",
+    "bitrate": "5M",
+    "maxInputImages": 10000,
+    "maxDurationSeconds": 3600,
+    "processTimeoutMs": 1800000
+  },
+  "schedule": {
+    "enabled": false,
+    "startTime": "08:00",
+    "stopTime": "18:00"
+  },
+  "notifications": {
+    "webhookEnabled": false,
+    "webhookUrl": "",
+    "emailEnabled": false,
+    "emailHost": "smtp.gmail.com",
+    "emailPort": 587,
+    "emailUser": "",
+    "emailPass": "",
+    "emailTo": ""
+  },
+  "resolutions": {
+    "capture": { "low": "1280x720", "medium": "1920x1080", "high": "3840x2160" },
+    "stream": { "low": "640x480", "medium": "1280x720", "high": "1920x1080" }
+  }
+}
