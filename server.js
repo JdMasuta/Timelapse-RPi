@@ -8,6 +8,8 @@ const path = require("path");
 const os = require("os"); // Import the 'os' module
 const CameraService = require("./services/cameraService");
 const ConfigService = require("./services/configService");
+const NotificationService = require("./services/NotificationService");
+const Scheduler = require("./services/Scheduler");
 
 const app = express();
 const server = http.createServer(app);
@@ -156,6 +158,114 @@ async function initializeApp() {
 
     // Initialize camera service with full config
     const cameraService = new CameraService();
+    const notificationService = new NotificationService();
+
+    // Stream-notification mapping shared by capture flows (broadcasts to all clients).
+    const handleStreamNotification = (type, message) => {
+      if (type === "stream-paused") {
+        io.emit("streamStatusUpdate", "Paused for capture");
+        io.emit("notification", { message, type: "info" });
+      } else if (type === "stream-resumed") {
+        io.emit("streamStatusUpdate", "Streaming");
+        io.emit("notification", { message, type: "success" });
+      } else if (type === "stream-ready") {
+        io.emit("streamStatusUpdate", "Streaming");
+        io.emit("liveStreamUrl", streamUrl());
+        io.emit("notification", { message, type: "success" });
+      } else if (type === "stream-error") {
+        io.emit("streamStatusUpdate", "Stopped");
+        io.emit("liveStreamUrl", "");
+        io.emit("notification", { message, type: "error" });
+      }
+    };
+
+    // Reusable capture start/stop flows (used by both Socket.IO handlers and the
+    // Scheduler). All feedback is broadcast via io so it works without a client socket.
+    async function runStartCapture() {
+      if (cameraService.getStatus().isCapturing) return false;
+
+      await cameraService.startTimelapse(
+        currentConfig,
+        (captureData) => {
+          io.emit("statusUpdate", {
+            captureStatus: "Running",
+            imageCount: captureData.imageCount,
+            sessionTime: captureData.sessionTime,
+            nextCapture: `in ${currentConfig.captureInterval}s`,
+          });
+        },
+        (error) => {
+          console.error("Timelapse capture error:", error);
+          io.emit("statusUpdate", {
+            captureStatus: "Stopped",
+            imageCount: cameraService.getStatus().imageCount,
+            sessionTime: cameraService.getStatus().sessionTime,
+            nextCapture: "--",
+          });
+          io.emit("notification", {
+            message: `Capture failed: ${error.message}`,
+            type: "error",
+          });
+          notificationService.notify("capture-error", { error: error.message });
+        },
+        handleStreamNotification
+      );
+
+      const newStatus = cameraService.getStatus();
+      io.emit("statusUpdate", {
+        captureStatus: "Running",
+        imageCount: newStatus.imageCount,
+        sessionTime: newStatus.sessionTime,
+        nextCapture: `in ${currentConfig.captureInterval}s`,
+      });
+      io.emit("notification", {
+        message: "Time-lapse capture started!",
+        type: "success",
+      });
+      notificationService.notify("capture-started", {
+        interval: currentConfig.captureInterval,
+      });
+      return true;
+    }
+
+    function runStopCapture() {
+      if (!cameraService.getStatus().isCapturing) return false;
+
+      const stopped = cameraService.stopTimelapse();
+      if (stopped) {
+        const finalStatus = cameraService.getStatus();
+        io.emit("statusUpdate", {
+          captureStatus: "Stopped",
+          imageCount: finalStatus.imageCount,
+          sessionTime: finalStatus.sessionTime,
+          nextCapture: "--",
+        });
+        io.emit("notification", {
+          message: "Time-lapse capture stopped.",
+          type: "success",
+        });
+        notificationService.notify("capture-stopped", {
+          imageCount: finalStatus.imageCount,
+        });
+      }
+      return stopped;
+    }
+
+    // Daily schedule: auto-start/stop capture inside the configured window.
+    const scheduler = new Scheduler({
+      isEnabled: () => process.env.SCHEDULE_ENABLED === "true",
+      getWindow: () => ({
+        start: process.env.SCHEDULE_START_TIME || "08:00",
+        stop: process.env.SCHEDULE_STOP_TIME || "18:00",
+      }),
+      isCapturing: () => cameraService.getStatus().isCapturing,
+      startCapture: () =>
+        runStartCapture().catch((e) =>
+          console.error("Scheduler failed to start capture:", e.message)
+        ),
+      stopCapture: () => runStopCapture(),
+    });
+    scheduler.start();
 
     // --- Socket.IO Connection Handling ---
     io.on("connection", (socket) => {
@@ -297,110 +407,35 @@ async function initializeApp() {
 
       // Handle start capture command
       socket.on("startCapture", async () => {
-        const status = cameraService.getStatus();
-        if (!status.isCapturing) {
-          try {
-            // No need to manually set stream process - CameraService manages it internally
-
-            await cameraService.startTimelapse(
-              currentConfig,
-              // onImageCaptured callback
-              (captureData) => {
-                io.emit("statusUpdate", {
-                  captureStatus: "Running",
-                  imageCount: captureData.imageCount,
-                  sessionTime: captureData.sessionTime,
-                  nextCapture: `in ${currentConfig.captureInterval}s`,
-                });
-              },
-              // onError callback
-              (error) => {
-                console.error("Timelapse capture error:", error);
-                io.emit("statusUpdate", {
-                  captureStatus: "Stopped",
-                  imageCount: cameraService.getStatus().imageCount,
-                  sessionTime: cameraService.getStatus().sessionTime,
-                  nextCapture: "--",
-                });
-                socket.emit("notification", {
-                  message: `Capture failed: ${error.message}`,
-                  type: "error",
-                });
-              },
-              // onStreamNotification callback
-              (type, message) => {
-                if (type === "stream-paused") {
-                  io.emit("streamStatusUpdate", "Paused for capture");
-                  io.emit("notification", { message, type: "info" });
-                } else if (type === "stream-resumed") {
-                  io.emit("streamStatusUpdate", "Streaming");
-                  io.emit("notification", { message, type: "success" });
-                } else if (type === "stream-ready") {
-                  // New handler for when stream is actually ready
-                  io.emit("streamStatusUpdate", "Streaming");
-                  io.emit("liveStreamUrl", streamUrl());
-                  io.emit("notification", { message, type: "success" });
-                } else if (type === "stream-error") {
-                  io.emit("streamStatusUpdate", "Stopped");
-                  io.emit("liveStreamUrl", "");
-                  io.emit("notification", { message, type: "error" });
-                }
-              }
-            );
-
-            const newStatus = cameraService.getStatus();
-            io.emit("statusUpdate", {
-              captureStatus: "Running",
-              imageCount: newStatus.imageCount,
-              sessionTime: newStatus.sessionTime,
-              nextCapture: `in ${currentConfig.captureInterval}s`,
-            });
-            socket.emit("notification", {
-              message: "Time-lapse capture started with fswebcam!",
-              type: "success",
-            });
-          } catch (error) {
-            console.error("Failed to start timelapse:", error);
-            socket.emit("notification", {
-              message: `Failed to start capture: ${error.message}`,
-              type: "error",
-            });
-          }
-        } else {
+        if (cameraService.getStatus().isCapturing) {
           socket.emit("notification", {
             message: "Capture is already running.",
             type: "info",
+          });
+          return;
+        }
+        try {
+          await runStartCapture();
+        } catch (error) {
+          console.error("Failed to start timelapse:", error);
+          socket.emit("notification", {
+            message: `Failed to start capture: ${error.message}`,
+            type: "error",
           });
         }
       });
 
       // Handle stop capture command
       socket.on("stopCapture", () => {
-        const status = cameraService.getStatus();
-        if (status.isCapturing) {
-          console.log("Stopping timelapse capture...");
-          const stopped = cameraService.stopTimelapse();
-
-          if (stopped) {
-            const finalStatus = cameraService.getStatus();
-
-            io.emit("statusUpdate", {
-              captureStatus: "Stopped",
-              imageCount: finalStatus.imageCount,
-              sessionTime: finalStatus.sessionTime,
-              nextCapture: "--",
-            });
-            socket.emit("notification", {
-              message: "Time-lapse capture stopped.",
-              type: "success",
-            });
-          }
-        } else {
+        if (!cameraService.getStatus().isCapturing) {
           socket.emit("notification", {
             message: "Capture is not running.",
             type: "info",
           });
+          return;
         }
+        console.log("Stopping timelapse capture...");
+        runStopCapture();
       });
 
       // Handle toggle stream command
@@ -495,6 +530,11 @@ async function initializeApp() {
             }
           );
 
+          notificationService.notify("video-complete", {
+            filename: result.filename,
+            size: result.size,
+          });
+
           // Emit completion status
           io.emit("videoGenerationStatus", {
             status: "complete",
@@ -529,6 +569,7 @@ async function initializeApp() {
           }
         } catch (error) {
           console.error("Video generation failed:", error);
+          notificationService.notify("video-error", { error: error.message });
 
           // Emit error status
           io.emit("videoGenerationStatus", {
@@ -892,7 +933,8 @@ async function initializeApp() {
       // Cleanup camera service
       cameraService.cleanup();
 
-      // Clear intervals
+      // Stop the scheduler and clear intervals
+      scheduler.stop();
       clearInterval(systemInfoInterval);
 
       // Close server

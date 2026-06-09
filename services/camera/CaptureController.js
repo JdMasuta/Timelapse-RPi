@@ -89,9 +89,7 @@ class CaptureController {
       return { filename: imageFilename, filepath, resolution, timestamp: isoTimestamp };
     }
 
-    const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:45"; // Adjust font size as needed
-
-    const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}" --font ${font}`;
+    const cmd = this._buildFswebcamCommand(resolution, filepath, timestamp, imageFilename);
 
     Logger.info("CaptureController", "Executing capture command", {
       cmd,
@@ -116,6 +114,28 @@ class CaptureController {
       });
       throw error;
     }
+  }
+
+  /**
+   * Build the fswebcam command, applying rotation/flip from configuration.
+   * Rotation/flip are read from the environment (kept in sync with settings.json).
+   * @private
+   */
+  _buildFswebcamCommand(resolution, filepath, timestamp, title) {
+    const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:45";
+    let cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${title}" --font ${font}`;
+
+    const rotation = parseInt(process.env.ROTATION) || 0;
+    if ([90, 180, 270].includes(rotation)) {
+      cmd += ` --rotate ${rotation}`;
+    }
+    if (process.env.FLIP_HORIZONTAL === "true") {
+      cmd += " --flip h";
+    }
+    if (process.env.FLIP_VERTICAL === "true") {
+      cmd += " --flip v";
+    }
+    return cmd;
   }
 
   /**
