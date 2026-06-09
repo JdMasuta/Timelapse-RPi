@@ -55,7 +55,8 @@ class VideoController {
     });
 
     this.ensureDirectories();
-    this.setupGracefulShutdown();
+    // Note: process shutdown is owned solely by server.js, which calls cleanup() during
+    // its graceful shutdown. This controller no longer registers its own signal handlers.
   }
 
   async ensureDirectories() {
@@ -80,26 +81,6 @@ class VideoController {
     }
   }
 
-  setupGracefulShutdown() {
-    const shutdown = async (signal) => {
-      Logger.info("VideoController", "Graceful shutdown initiated", { signal });
-
-      if (this.currentJob) {
-        Logger.info(
-          "VideoController",
-          "Cancelling current job during shutdown"
-        );
-        await this.cancelVideoCreation();
-      }
-
-      this.processManager.cleanup();
-      Logger.info("VideoController", "Shutdown complete");
-      process.exit(0);
-    };
-
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT", () => shutdown("SIGINT"));
-  }
 
   /**
    * Create video from folder of images - Production Ready

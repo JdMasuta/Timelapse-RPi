@@ -1,25 +1,35 @@
 // services/camera/OperationQueue.js - Queue management logic
 
-const PriorityQueue = require("js-priority-queue");
 const Logger = require("./Logger");
+
+/**
+ * Minimal highest-priority-first queue. Replaces the external js-priority-queue
+ * dependency: the workload is tiny (a handful of operations), so a sorted array is
+ * more than sufficient and removes a dependency.
+ */
+class PriorityQueue {
+  constructor() {
+    this.items = [];
+  }
+  get length() {
+    return this.items.length;
+  }
+  queue(item) {
+    this.items.push(item);
+    // Highest priority first; stable for equal priorities (insertion order preserved).
+    this.items.sort((a, b) => (b.priority || 0) - (a.priority || 0));
+  }
+  dequeue() {
+    return this.items.shift();
+  }
+  clear() {
+    this.items = [];
+  }
+}
 
 class OperationQueue {
   constructor() {
-    this.queue = new PriorityQueue({
-      comparator: (a, b) => {
-        if (!a && !b) return 0;
-        if (!a) return 1;
-        if (!b) return -1;
-        if (typeof a.priority !== "number" || typeof b.priority !== "number") {
-          Logger.error("OperationQueue", "Invalid operation priority", {
-            a,
-            b,
-          });
-          return 0;
-        }
-        return b.priority - a.priority;
-      },
-    });
+    this.queue = new PriorityQueue();
 
     this.currentOperation = null;
     this.operationStates = new Map();

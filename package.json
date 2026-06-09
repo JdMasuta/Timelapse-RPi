@@ -38,7 +38,6 @@
     "adm-zip": "^0.5.16",
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
-    "js-priority-queue": "^0.1.5",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
