@@ -74,6 +74,20 @@ class StreamController {
       this.currentStreamConfig = { ...config };
       const resolution = this.getResolutionForQuality(config.streamQuality);
 
+      // Dev/test mode: simulate a running stream without spawning mjpg_streamer.
+      if (process.env.MOCK_CAMERA === "true") {
+        this.streamProcess = {
+          pid: "mock",
+          killed: false,
+          kill: () => {},
+        };
+        Logger.info("StreamController", "Mock stream started", { resolution });
+        setImmediate(() =>
+          onNotification?.("stream-ready", "Live preview is ready (mock)")
+        );
+        return true;
+      }
+
       const command = [
         "-i",
         `input_uvc.so -d /dev/video0 -r ${resolution} -f ${config.streamFps}`,

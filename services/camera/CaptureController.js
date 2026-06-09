@@ -6,7 +6,6 @@ const { exec } = require("child_process");
 const path = require("path");
 const Logger = require("./Logger");
 const { RESOLUTIONS } = require("./constants");
-const { time } = require("console");
 
 const execAsync = promisify(exec);
 
@@ -52,6 +51,20 @@ class CaptureController {
   }
 
   /**
+   * Write a minimal valid placeholder JPEG (used when MOCK_CAMERA is enabled).
+   * @private
+   */
+  async _writeMockImage(filepath) {
+    // 1x1 baseline JPEG, just enough to be a valid image file on disk.
+    const MOCK_JPEG_BASE64 =
+      "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8U" +
+      "HRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA" +
+      "/8QAFAABAAAAAAAAAAAAAAAAAAAAAv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEA" +
+      "AD8AfwD/2Q==";
+    await fs.promises.writeFile(filepath, Buffer.from(MOCK_JPEG_BASE64, "base64"));
+  }
+
+  /**
    * Capture a single image
    */
   async captureImage(config, filename = null) {
@@ -59,6 +72,23 @@ class CaptureController {
     const timestamp = this.generateTimestamp();
     const imageFilename = filename || this.generateFilename(timestamp);
     const filepath = path.join(this.outputDir, imageFilename);
+
+    // Dev/test mode: write a placeholder image instead of invoking fswebcam,
+    // so the full pipeline can be smoke-tested without camera hardware.
+    if (process.env.MOCK_CAMERA === "true") {
+      await this._writeMockImage(filepath);
+      Logger.info("CaptureController", "Mock image written", {
+        filename: imageFilename,
+        filepath,
+      });
+      return {
+        filename: imageFilename,
+        filepath,
+        resolution,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
     const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:45"; // Adjust font size as needed
 
     const cmd = `fswebcam -r ${resolution} "${filepath}" --timestamp ${timestamp} --title "${imageFilename}" --font ${font}`;

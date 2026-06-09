@@ -12,20 +12,6 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-// IMPORTANT: Set the absolute path to your mjpg_streamer executable
-// You might find it in /usr/local/bin/mjpg_streamer or within the directory you compiled it.
-// Replace '/path/to/your/mjpg_streamer' with the actual path.
-const MJPEG_STREAMER_PATH = "/usr/local/bin/mjpg_streamer"; // Common default install location
-// If you compiled it in your home directory, it might be something like:
-// const MJPEG_STREAMER_PATH = '/home/pi/mjpg-streamer/mjpg-streamer-experimental/mjpg_streamer';
-
-// IMPORTANT: Set the absolute path to mjpeg-streamer's www directory
-// This is crucial for the output_http.so plugin to serve its web interface (and the stream endpoint)
-// It's often ./www relative to the mjpg_streamer executable, or /usr/local/share/mjpg-streamer/www/
-const MJPEG_STREAMER_WWW_PATH = "/usr/local/share/mjpg-streamer/www/"; // Common default install location
-// If you compiled it in your home directory, it might be something like:
-// const MJPEG_STREAMER_WWW_PATH = '/home/pi/mjpg-streamer/mjpg-streamer-experimental/www/';
-
 // Function to get the server's local IP address
 function getServerIpAddress() {
   const interfaces = os.networkInterfaces();
@@ -165,7 +151,6 @@ async function initializeApp() {
 
     // Initialize camera service with full config
     const cameraService = new CameraService();
-    let captureStatus = "Stopped";
 
     // --- Socket.IO Connection Handling ---
     io.on("connection", (socket) => {
@@ -316,8 +301,6 @@ async function initializeApp() {
         const status = cameraService.getStatus();
         if (!status.isCapturing) {
           try {
-            captureStatus = "Running";
-
             // No need to manually set stream process - CameraService manages it internally
 
             await cameraService.startTimelapse(
@@ -334,7 +317,6 @@ async function initializeApp() {
               // onError callback
               (error) => {
                 console.error("Timelapse capture error:", error);
-                captureStatus = "Stopped";
                 io.emit("statusUpdate", {
                   captureStatus: "Stopped",
                   imageCount: cameraService.getStatus().imageCount,
@@ -381,7 +363,6 @@ async function initializeApp() {
             });
           } catch (error) {
             console.error("Failed to start timelapse:", error);
-            captureStatus = "Stopped";
             socket.emit("notification", {
               message: `Failed to start capture: ${error.message}`,
               type: "error",
@@ -403,7 +384,6 @@ async function initializeApp() {
           const stopped = cameraService.stopTimelapse();
 
           if (stopped) {
-            captureStatus = "Stopped";
             const finalStatus = cameraService.getStatus();
 
             io.emit("statusUpdate", {
