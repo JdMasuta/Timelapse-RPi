@@ -35,11 +35,13 @@ class CaptureController {
   }
 
   /**
-   * Generate filename for capture
+   * Generate a capture filename in the canonical, parseable pattern:
+   *   timelapse_<ISO timestamp with [:.] replaced by ->.jpg
+   * e.g. timelapse_2025-06-25T13-43-41-407Z.jpg
    */
-  generateFilename(prefix = "timelapse", timestamp = null) {
-    !!timestamp ? timelapse : this.generateTimestamp();
-    return `${prefix}_${timestamp}.jpg`;
+  generateFilename(timestamp = null) {
+    const ts = timestamp || this.generateTimestamp();
+    return `timelapse_${ts}.jpg`;
   }
 
   /**
@@ -69,7 +71,9 @@ class CaptureController {
    */
   async captureImage(config, filename = null) {
     const resolution = "3840x2160"; // this.getResolutionForQuality(config.imageQuality);
-    const timestamp = this.generateTimestamp();
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, "-");
+    const isoTimestamp = now.toISOString();
     const imageFilename = filename || this.generateFilename(timestamp);
     const filepath = path.join(this.outputDir, imageFilename);
 
@@ -81,12 +85,8 @@ class CaptureController {
         filename: imageFilename,
         filepath,
       });
-      return {
-        filename: imageFilename,
-        filepath,
-        resolution,
-        timestamp: new Date().toISOString(),
-      };
+      await this._appendManifest(imageFilename, isoTimestamp);
+      return { filename: imageFilename, filepath, resolution, timestamp: isoTimestamp };
     }
 
     const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:45"; // Adjust font size as needed
@@ -106,12 +106,8 @@ class CaptureController {
         filepath,
       });
 
-      return {
-        filename: imageFilename,
-        filepath,
-        resolution,
-        timestamp: new Date().toISOString(),
-      };
+      await this._appendManifest(imageFilename, isoTimestamp);
+      return { filename: imageFilename, filepath, resolution, timestamp: isoTimestamp };
     } catch (error) {
       Logger.error("CaptureController", "Error capturing image", {
         error: error.message,
@@ -119,6 +115,31 @@ class CaptureController {
         filename: imageFilename,
       });
       throw error;
+    }
+  }
+
+  /**
+   * Append a capture entry to the sidecar manifest (captures/manifest.json).
+   * The manifest is the source of truth for frame ordering during video generation,
+   * decoupling that step from filename parsing.
+   * @private
+   */
+  async _appendManifest(filename, isoTimestamp) {
+    const manifestPath = path.join(this.outputDir, "manifest.json");
+    try {
+      let manifest = {};
+      try {
+        manifest = JSON.parse(await fs.promises.readFile(manifestPath, "utf8"));
+      } catch (e) {
+        manifest = {}; // missing or corrupt -> start fresh
+      }
+      manifest[filename] = { timestamp: isoTimestamp };
+      await fs.promises.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+    } catch (error) {
+      // Manifest is an optimization; never fail a capture because of it.
+      Logger.warn("CaptureController", "Failed to update manifest", {
+        error: error.message,
+      });
     }
   }
 
