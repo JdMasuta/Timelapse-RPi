@@ -18,10 +18,10 @@ class ConfigService {
       MJPG_STREAMER_AUTOSTART: true,
 
       // Timelapse Settings
-      CAPTURE_INTERVAL: 5,
+      CAPTURE_INTERVAL: 120,
       OUTPUT_DIR: "./captures",
       IMAGE_QUALITY: "high",
-      MAX_STORAGE_GB: 10,
+      MAX_STORAGE_GB: 100,
 
       // Camera Stream Settings
       STREAM_FPS: 15,
@@ -37,26 +37,26 @@ class ConfigService {
       // Video Generation Settings
       VIDEO_FPS: 30,
       VIDEO_QUALITY: "medium",
-      VIDEO_CODEC: "h264",
+      VIDEO_CODEC: "h265",
       VIDEO_BITRATE: "5M",
 
       // Advanced Camera Settings
-      CAMERA_TYPE: "libcamera",
-      CAMERA_DEVICE: 0,
-      RESOLUTION_WIDTH: 1920,
-      RESOLUTION_HEIGHT: 1080,
+      CAMERA_TYPE: "usb",
+      CAMERA_DEVICE: "/dev/video0",
+      RESOLUTION_WIDTH: 1280,
+      RESOLUTION_HEIGHT: 720,
       ROTATION: 0,
       FLIP_HORIZONTAL: false,
       FLIP_VERTICAL: false,
 
       // MJPG-Streamer Plugin Settings
-      MJPG_INPUT_PLUGIN: "input_raspicam.so",
-      MJPG_INPUT_OPTIONS: "-x 1280 -y 720 -fps 15 -ex auto",
+      MJPG_INPUT_PLUGIN: "input_uvc.so",
+      MJPG_INPUT_OPTIONS: "-r 1920x1080 -fps 15 -ex auto",
 
       // Storage Management
       AUTO_CLEANUP: true,
       MAX_IMAGES: 1000,
-      CLEANUP_OLDER_THAN_DAYS: 7,
+      CLEANUP_OLDER_THAN_DAYS: 31,
       AUTO_GENERATE_VIDEO: false,
 
       // Performance & Resource Settings

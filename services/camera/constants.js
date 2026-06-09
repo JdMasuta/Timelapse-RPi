@@ -9,9 +9,9 @@ const OPERATION_PRIORITIES = {
 };
 
 const RESOLUTIONS = {
-  low: "640x480",
-  medium: "1280x720",
-  high: "1920x1080",
+  low: "1280x720",
+  medium: "1920x1080",
+  high: "3840x2160",
 };
 
 const DEFAULT_PATHS = {
